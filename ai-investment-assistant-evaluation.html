@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AI 投研助手噪音过滤效果与分析判断可信度评估方案">
+  <title>产品评估 · AI 投研助手</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f3f5f8;
+      --paper: #ffffff;
+      --ink: #172033;
+      --ink-soft: #3d475a;
+      --muted: #6c7689;
+      --line: #dfe4ec;
+      --line-soft: #ebeff4;
+      --blue: #1769e0;
+      --blue-deep: #114fa8;
+      --blue-wash: #edf4ff;
+      --cyan: #0f7894;
+      --cyan-wash: #eaf8fb;
+      --green: #16845b;
+      --green-wash: #eaf7f1;
+      --amber: #9a6100;
+      --amber-wash: #fff6e6;
+      --red: #b73943;
+      --red-wash: #fff0f1;
+      --shadow: 0 18px 48px rgba(31, 47, 74, 0.09), 0 2px 8px rgba(31, 47, 74, 0.04);
+      --display: "Avenir Next", "SF Pro Display", "PingFang SC", sans-serif;
+      --body: "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(23, 105, 224, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 105, 224, 0.035) 1px, transparent 1px),
+        var(--canvas);
+      background-size: 32px 32px;
+      color: var(--ink);
+      font-family: var(--body);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; }
+    button { font: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      border-bottom: 1px solid rgba(223, 228, 236, 0.85);
+      background: rgba(243, 245, 248, 0.86);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+    }
+
+    .topbar-inner {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--display);
+      font-weight: 680;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: var(--ink);
+      color: #fff;
+      font: 700 12px/1 var(--mono);
+    }
+
+    .topnav { display: flex; gap: 4px; }
+
+    .topnav a {
+      padding: 8px 11px;
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .topnav a:hover { background: #fff; color: var(--ink); }
+
+    .hero { padding: 82px 0 42px; }
+
+    .eyebrow {
+      margin: 0 0 15px;
+      color: var(--blue);
+      font: 700 12px/1.4 var(--mono);
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 900px;
+      margin-bottom: 22px;
+      font-family: var(--display);
+      font-size: clamp(44px, 7vw, 82px);
+      line-height: 0.98;
+      letter-spacing: -0.055em;
+      font-weight: 720;
+    }
+
+    .hero-copy {
+      max-width: 750px;
+      margin-bottom: 34px;
+      color: var(--ink-soft);
+      font-size: clamp(17px, 2vw, 21px);
+      line-height: 1.65;
+    }
+
+    .hero-copy strong { color: var(--ink); }
+
+    .gate-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr)) 132px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    .gate-link {
+      min-height: 104px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 17px 16px;
+      border-right: 1px solid var(--line-soft);
+      color: var(--ink);
+      text-decoration: none;
+      transition: background 160ms ease, transform 160ms ease;
+    }
+
+    .gate-link:hover { background: var(--blue-wash); }
+    .gate-link.trust:hover { background: var(--cyan-wash); }
+
+    .gate-link small {
+      color: var(--muted);
+      font: 650 10px/1.2 var(--mono);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .gate-link span { font-weight: 690; line-height: 1.3; }
+
+    .gate-result {
+      display: grid;
+      place-items: center;
+      padding: 14px;
+      background: var(--ink);
+      color: #fff;
+      text-align: center;
+    }
+
+    .gate-result strong {
+      display: block;
+      font: 750 19px/1.15 var(--display);
+    }
+
+    .gate-result small {
+      display: block;
+      margin-top: 7px;
+      color: #c8d1df;
+      font-size: 11px;
+    }
+
+    .reading-key {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .key-item {
+      min-height: 86px;
+      padding: 17px 18px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(255,255,255,.66);
+    }
+
+    .key-item b { display: block; margin-bottom: 7px; font-size: 14px; }
+    .key-item span { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    .section { padding: 74px 0; }
+    .section + .section { border-top: 1px solid var(--line); }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 190px 1fr;
+      gap: 34px;
+      align-items: end;
+      margin-bottom: 34px;
+    }
+
+    .section-label {
+      color: var(--blue);
+      font: 700 12px/1.4 var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .trust-section .section-label { color: var(--cyan); }
+
+    h2 {
+      margin-bottom: 8px;
+      font-family: var(--display);
+      font-size: clamp(31px, 4vw, 48px);
+      line-height: 1.08;
+      letter-spacing: -0.04em;
+    }
+
+    .section-intro {
+      max-width: 710px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .metric-stack { display: grid; gap: 18px; }
+
+    .metric-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--paper);
+      box-shadow: 0 8px 24px rgba(31, 47, 74, 0.045);
+    }
+
+    .metric-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--blue);
+    }
+
+    .metric-card.trust::before { background: var(--cyan); }
+
+    .metric-summary {
+      display: grid;
+      grid-template-columns: 52px 1fr minmax(230px, 0.75fr);
+      gap: 20px;
+      align-items: center;
+      padding: 24px 26px 22px;
+    }
+
+    .metric-number {
+      align-self: start;
+      color: var(--blue);
+      font: 740 14px/1 var(--mono);
+    }
+
+    .trust .metric-number { color: var(--cyan); }
+
+    .metric-title h3 {
+      margin-bottom: 7px;
+      font-family: var(--display);
+      font-size: 25px;
+      letter-spacing: -0.03em;
+    }
+
+    .metric-title p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .formula {
+      padding: 13px 14px;
+      border-radius: 12px;
+      background: var(--blue-wash);
+      color: var(--blue-deep);
+      font: 650 12px/1.55 var(--mono);
+    }
+
+    .trust .formula { background: var(--cyan-wash); color: #0c647b; }
+
+    .submetrics {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      border-top: 1px solid var(--line-soft);
+      background: #fbfcfe;
+    }
+
+    .submetric {
+      min-height: 140px;
+      padding: 17px 16px 18px;
+      border-right: 1px solid var(--line-soft);
+    }
+
+    .submetric:last-child { border-right: 0; }
+
+    .submetric-code {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 4px 7px;
+      border: 1px solid #d6e4fb;
+      border-radius: 7px;
+      background: #fff;
+      color: var(--blue-deep);
+      font: 700 10px/1 var(--mono);
+    }
+
+    .trust .submetric-code { border-color: #cee8ee; color: #0c647b; }
+    .submetric b { display: block; margin-bottom: 7px; font-size: 13px; }
+    .submetric p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .pass-rule {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 13px 26px;
+      border-top: 1px solid var(--line-soft);
+      color: var(--ink-soft);
+      font-size: 13px;
+    }
+
+    .pass-dot {
+      width: 9px;
+      height: 9px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px var(--green-wash);
+    }
+
+    .threshold-section {
+      width: 100%;
+      padding: 82px 0;
+      background: var(--ink);
+      color: #fff;
+    }
+
+    .threshold-section .shell { position: relative; }
+
+    .threshold-section .eyebrow { color: #8fb9ff; }
+
+    .threshold-intro {
+      max-width: 760px;
+      margin-bottom: 34px;
+      color: #c7cfdb;
+      font-size: 17px;
+      line-height: 1.65;
+    }
+
+    .threshold-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .threshold-card {
+      min-height: 250px;
+      display: flex;
+      flex-direction: column;
+      padding: 24px;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 18px;
+      background: rgba(255,255,255,.055);
+    }
+
+    .threshold-card small {
+      margin-bottom: 28px;
+      color: #96a2b5;
+      font: 700 10px/1.3 var(--mono);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .threshold-card h3 { margin-bottom: 9px; font: 690 20px/1.25 var(--display); }
+    .threshold-card p { color: #bec7d5; font-size: 13px; line-height: 1.55; }
+
+    .threshold-formula {
+      margin-top: auto;
+      padding-top: 17px;
+      border-top: 1px solid rgba(255,255,255,.12);
+      color: #fff;
+      font: 650 12px/1.65 var(--mono);
+    }
+
+    .minimum {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .release-gate, .blockers {
+      border-radius: 20px;
+      padding: 28px;
+    }
+
+    .release-gate { background: #fff; color: var(--ink); }
+
+    .release-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .release-title h3 { margin: 0; font: 700 23px/1.2 var(--display); }
+
+    .release-badge {
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: var(--green-wash);
+      color: var(--green);
+      font: 750 10px/1 var(--mono);
+      letter-spacing: .05em;
+    }
+
+    .release-row {
+      display: grid;
+      grid-template-columns: 116px 1fr;
+      gap: 18px;
+      padding: 14px 0;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .release-row:first-of-type { border-top: 0; }
+    .release-row b { font-size: 13px; }
+    .release-row span { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    .blockers {
+      border: 1px solid rgba(255, 125, 133, .28);
+      background: rgba(183, 57, 67, .13);
+    }
+
+    .blockers h3 { margin-bottom: 18px; font: 690 21px/1.25 var(--display); }
+
+    .blocker-list { display: grid; gap: 11px; padding: 0; margin: 0; list-style: none; }
+
+    .blocker-list li {
+      position: relative;
+      padding-left: 18px;
+      color: #e4c7ca;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .blocker-list li::before {
+      content: "×";
+      position: absolute;
+      left: 0;
+      color: #ff8a92;
+      font-weight: 800;
+    }
+
+    .verdict {
+      margin-top: 18px;
+      padding: 22px 24px;
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 18px;
+      background: rgba(255,255,255,.055);
+      color: #d8dee8;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .verdict strong { color: #fff; }
+
+    .sources { padding: 54px 0 72px; }
+    .sources h2 { font-size: 28px; }
+
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .source-link {
+      min-height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 15px 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,.72);
+      color: var(--ink-soft);
+      font-size: 12px;
+      line-height: 1.45;
+      text-decoration: none;
+    }
+
+    .source-link:hover { border-color: #b9c8dd; background: #fff; }
+    .source-link span:last-child { color: var(--blue); font: 700 15px/1 var(--mono); }
+
+    footer {
+      padding: 22px 0 34px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    :focus-visible { outline: 3px solid rgba(23, 105, 224, .32); outline-offset: 3px; }
+
+    @media (max-width: 960px) {
+      .gate-strip { grid-template-columns: repeat(3, 1fr); }
+      .gate-link:nth-child(3) { border-right: 0; }
+      .gate-result { grid-column: span 3; min-height: 74px; }
+      .metric-summary { grid-template-columns: 44px 1fr; }
+      .formula { grid-column: 2; }
+      .submetrics { grid-template-columns: repeat(2, 1fr); }
+      .submetric:nth-child(even) { border-right: 0; }
+      .submetric:last-child { grid-column: span 2; }
+      .threshold-grid, .source-grid { grid-template-columns: 1fr; }
+      .threshold-card { min-height: 190px; }
+      .minimum { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 24px, 1180px); }
+      .topnav { display: none; }
+      .hero { padding-top: 54px; }
+      h1 { font-size: clamp(39px, 13vw, 60px); }
+      .gate-strip { grid-template-columns: repeat(2, 1fr); }
+      .gate-link:nth-child(3) { border-right: 1px solid var(--line-soft); }
+      .gate-link:nth-child(even) { border-right: 0; }
+      .gate-result { grid-column: span 2; }
+      .reading-key { grid-template-columns: 1fr; }
+      .section { padding: 54px 0; }
+      .section-head { grid-template-columns: 1fr; gap: 10px; }
+      .metric-summary { grid-template-columns: 1fr; gap: 12px; padding: 22px; }
+      .metric-number { font-size: 12px; }
+      .formula { grid-column: auto; }
+      .submetrics { grid-template-columns: 1fr; }
+      .submetric, .submetric:nth-child(even) { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .submetric:last-child { grid-column: auto; border-bottom: 0; }
+      .pass-rule { align-items: flex-start; padding: 14px 22px 17px; }
+      .threshold-section { padding: 60px 0; }
+      .release-row { grid-template-columns: 1fr; gap: 5px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .topbar { position: static; background: #fff; }
+      .metric-card, .gate-strip { break-inside: avoid; box-shadow: none; }
+      .threshold-section { background: #fff; color: var(--ink); border-top: 2px solid var(--ink); }
+      .threshold-section .eyebrow, .threshold-intro, .threshold-card p, .verdict { color: var(--ink-soft); }
+      .threshold-card, .blockers, .verdict { border-color: var(--line); background: #fff; color: var(--ink); }
+      .threshold-card small, .threshold-formula, .release-title h3, .blockers h3, .verdict strong { color: var(--ink); }
+      .blocker-list li { color: var(--ink-soft); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="brand"><span class="brand-mark">AI</span><span>产品评估</span></div>
+      <nav class="topnav" aria-label="页面导航">
+        <a href="#noise">噪音过滤</a>
+        <a href="#trust">分析可信度</a>
+        <a href="#minimum">最低验证标准</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero shell">
+      <p class="eyebrow">AI Investment Assistant · Release Evaluation</p>
+      <h1>先证明用户得到价值，<br>再谈上线。</h1>
+      <p class="hero-copy">衡量的不是模型“看起来多聪明”，而是它能否让用户<strong>看见真正重要的信息</strong>，并且<strong>正确理解分析为何成立、哪里仍不确定</strong>。</p>
+
+      <div class="gate-strip" aria-label="六项上线闸门">
+        <a class="gate-link" href="#metric-1"><small>噪音过滤 · 01</small><span>需求命中率</span></a>
+        <a class="gate-link" href="#metric-2"><small>噪音过滤 · 02</small><span>应知信息召回率</span></a>
+        <a class="gate-link" href="#metric-3"><small>噪音过滤 · 03</small><span>有效信息密度</span></a>
+        <a class="gate-link trust" href="#metric-4"><small>可信度 · 04</small><span>证据支持率</span></a>
+        <a class="gate-link trust" href="#metric-5"><small>可信度 · 05</small><span>不确定性匹配率</span></a>
+        <a class="gate-link trust" href="#metric-6"><small>可信度 · 06</small><span>判断帮助率</span></a>
+        <div class="gate-result"><div><strong>6 / 6</strong><small>全部通过才上线</small></div></div>
+      </div>
+
+      <div class="reading-key" aria-label="评估规则">
+        <div class="key-item"><b>先拆成可计算项</b><span>每个核心指标由 5 个子指标共同衡量。</span></div>
+        <div class="key-item"><b>阈值来自真实数据</b><span>比较当前基线、AI 方案与人工参照。</span></div>
+        <div class="key-item"><b>短板不可被平均</b><span>同组子指标全部通过，核心指标才通过。</span></div>
+      </div>
+    </section>
+
+    <section class="section shell" id="noise">
+      <div class="section-head">
+        <div class="section-label">Noise filtering</div>
+        <div>
+          <h2>噪音过滤效果怎么量</h2>
+          <p class="section-intro">既要找全用户需要的信息，也要减少无关、重复和不值得打扰的内容。展示更少不等于过滤更好。</p>
+        </div>
+      </div>
+
+      <div class="metric-stack">
+        <article class="metric-card" id="metric-1">
+          <div class="metric-summary">
+            <div class="metric-number">01</div>
+            <div class="metric-title"><h3>需求命中率</h3><p>用户主动问了以后，能否一次拿到完成任务真正需要的信息。</p></div>
+            <div class="formula">完成任务的有效会话<br>÷ 全部有效任务会话</div>
+          </div>
+          <div class="submetrics">
+            <div class="submetric"><span class="submetric-code">TCR</span><b>任务完成率</b><p>无需转向其他渠道即可完成任务的比例。</p></div>
+            <div class="submetric"><span class="submetric-code">KIR</span><b>关键信息召回</b><p>覆盖必要信息点占金标信息点的比例。</p></div>
+            <div class="submetric"><span class="submetric-code">AIP</span><b>答案信息精确</b><p>回答中直接服务当前任务的信息比例。</p></div>
+            <div class="submetric"><span class="submetric-code">FTR</span><b>首次解决率</b><p>首轮回答即完成核心任务的比例。</p></div>
+            <div class="submetric"><span class="submetric-code">COST↓</span><b>任务成本改善</b><p>对比基线的耗时、轮次、阅读量和外跳。</p></div>
+          </div>
+          <div class="pass-rule"><span class="pass-dot"></span><span><strong>通过：</strong>5 项全部过线；若完成质量只与基线持平，任务成本必须显著下降。</span></div>
+        </article>
+
+        <article class="metric-card" id="metric-2">
+          <div class="metric-summary">
+            <div class="metric-number">02</div>
+            <div class="metric-title"><h3>应知信息召回率</h3><p>用户没有主动问，但足以影响其持仓、自选或投资逻辑的信息是否被发现。</p></div>
+            <div class="formula">及时呈现的应知事件<br>÷ 全部应知事件</div>
+          </div>
+          <div class="submetrics">
+            <div class="submetric"><span class="submetric-code">R@K</span><b>Recall@K</b><p>首屏前 K 条覆盖了多少应知事件。</p></div>
+            <div class="submetric"><span class="submetric-code">nDCG@K</span><b>排序质量</b><p>最重要的信息是否出现在更靠前的位置。</p></div>
+            <div class="submetric"><span class="submetric-code">TR</span><b>及时召回率</b><p>在信息仍有决策价值的时间窗内呈现。</p></div>
+            <div class="submetric"><span class="submetric-code">CMR↓</span><b>重大漏失率</b><p>应该及时看到却没有出现的重大事件比例。</p></div>
+            <div class="submetric"><span class="submetric-code">UCC</span><b>上下文覆盖</b><p>持仓、自选、已确认逻辑各分组均达标。</p></div>
+          </div>
+          <div class="pass-rule"><span class="pass-dot"></span><span><strong>通过：</strong>5 项全部过线；总体召回达标但某类用户或事件持续漏失，仍失败。</span></div>
+        </article>
+
+        <article class="metric-card" id="metric-3">
+          <div class="metric-summary">
+            <div class="metric-number">03</div>
+            <div class="metric-title"><h3>有效信息密度</h3><p>系统完成取舍后，最终呈现的信息是否值得占用用户注意力。</p></div>
+            <div class="formula">用户确认有效且非重复的信息<br>÷ 实际接触的信息</div>
+          </div>
+          <div class="submetrics">
+            <div class="submetric"><span class="submetric-code">P@K</span><b>Precision@K</b><p>前 K 条中真正有价值的信息比例。</p></div>
+            <div class="submetric"><span class="submetric-code">DER↓</span><b>重复暴露率</b><p>没有新增事实的同一事件重复出现比例。</p></div>
+            <div class="submetric"><span class="submetric-code">SER</span><b>意外价值率</b><p>用户此前未知、事后确认有用的信息比例。</p></div>
+            <div class="submetric"><span class="submetric-code">PRC</span><b>个性化理由正确</b><p>用户认可“为什么与你有关”的比例。</p></div>
+            <div class="submetric"><span class="submetric-code">IDR↓</span><b>无效打扰率</b><p>用户认为不值得即时提醒的通知比例。</p></div>
+          </div>
+          <div class="pass-rule"><span class="pass-dot"></span><span><strong>通过：</strong>5 项全部过线，且应知信息召回不得下降；压缩率不单独决定通过。</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section shell trust-section" id="trust">
+      <div class="section-head">
+        <div class="section-label">Analysis trust</div>
+        <div>
+          <h2>分析判断可信度怎么量</h2>
+          <p class="section-intro">可信不是“有来源”或“说得像专家”，而是事实有据、确定程度合适，并让用户形成正确理解。</p>
+        </div>
+      </div>
+
+      <div class="metric-stack">
+        <article class="metric-card trust" id="metric-4">
+          <div class="metric-summary">
+            <div class="metric-number">04</div>
+            <div class="metric-title"><h3>证据支持率</h3><p>“已知事实”和关键判断，能否被对应来源直接支持。</p></div>
+            <div class="formula">有正确证据支持的关键主张<br>÷ 全部关键主张</div>
+          </div>
+          <div class="submetrics">
+            <div class="submetric"><span class="submetric-code">AFS</span><b>原子事实支持</b><p>拆分后的每个事实被可靠来源支持。</p></div>
+            <div class="submetric"><span class="submetric-code">CR</span><b>引用召回率</b><p>所有应该引用的关键主张都有引用。</p></div>
+            <div class="submetric"><span class="submetric-code">CP</span><b>引用精确率</b><p>引用内容确实支持它所对应的主张。</p></div>
+            <div class="submetric"><span class="submetric-code">DCR</span><b>数据一致率</b><p>主体、数字、单位、时间和口径一致。</p></div>
+            <div class="submetric"><span class="submetric-code">SVR</span><b>有效来源率</b><p>来源可访问、未撤回、时间与主体正确。</p></div>
+          </div>
+          <div class="pass-rule"><span class="pass-dot"></span><span><strong>通过：</strong>5 项全部过线；严重事实错误、伪造来源或引用矛盾直接阻断。</span></div>
+        </article>
+
+        <article class="metric-card trust" id="metric-5">
+          <div class="metric-summary">
+            <div class="metric-number">05</div>
+            <div class="metric-title"><h3>不确定性匹配率</h3><p>是否做到该确定时确定，该说“信息不足”时保留判断。</p></div>
+            <div class="formula">表达确定程度与证据强度一致的分析<br>÷ 全部分析</div>
+          </div>
+          <div class="submetrics">
+            <div class="submetric"><span class="submetric-code">ECE↓</span><b>校准误差</b><p>系统置信度与真实正确率之间的差距。</p></div>
+            <div class="submetric"><span class="submetric-code">FCR↓</span><b>错误确定率</b><p>证据不足时仍给出确定结论的比例。</p></div>
+            <div class="submetric"><span class="submetric-code">AR</span><b>正确保留召回</b><p>该保留时正确标记“无法确认”的比例。</p></div>
+            <div class="submetric"><span class="submetric-code">AP</span><b>保留精确率</b><p>被标记信息不足的样本确实证据不足。</p></div>
+            <div class="submetric"><span class="submetric-code">AURC↓</span><b>风险—覆盖</b><p>同时约束答得准和不能靠全部拒答取巧。</p></div>
+          </div>
+          <div class="pass-rule"><span class="pass-dot"></span><span><strong>通过：</strong>5 项全部过线；过度确定和过度拒答都不能通过。</span></div>
+        </article>
+
+        <article class="metric-card trust" id="metric-6">
+          <div class="metric-summary">
+            <div class="metric-number">06</div>
+            <div class="metric-title"><h3>判断帮助率</h3><p>用户是否更清楚原判断受到什么影响、接下来需要核验什么。</p></div>
+            <div class="formula">正确理解影响并形成下一步的分析<br>÷ 全部受评分析</div>
+          </div>
+          <div class="submetrics">
+            <div class="submetric"><span class="submetric-code">TIA</span><b>逻辑影响一致</b><p>支持、挑战、信息不足与专家金标一致。</p></div>
+            <div class="submetric"><span class="submetric-code">UCA</span><b>用户理解正确</b><p>能区分事实、推断、未知和改变条件。</p></div>
+            <div class="submetric"><span class="submetric-code">NAR</span><b>下一步可执行</b><p>能说出下一步应核验或观察什么。</p></div>
+            <div class="submetric"><span class="submetric-code">ARR</span><b>适当依赖率</b><p>采纳有依据分析、拒绝无依据分析。</p></div>
+            <div class="submetric"><span class="submetric-code">TMR↓</span><b>交易误导率</b><p>误解为明确买卖、仓位或时点建议的比例。</p></div>
+          </div>
+          <div class="pass-rule"><span class="pass-dot"></span><span><strong>通过：</strong>5 项全部过线；“觉得有帮助”但被误导为交易建议仍失败。</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="threshold-section" id="minimum">
+      <div class="shell">
+        <p class="eyebrow">Minimum release evidence</p>
+        <h2>上线的最低验证标准</h2>
+        <p class="threshold-intro">市场方法给出计算方式，真实数据决定通过线。上线前必须同时具备可比较的基线、可实现的人工参照和业务可承受的风险上限。</p>
+
+        <div class="threshold-grid">
+          <article class="threshold-card">
+            <small>01 · 用户价值线</small>
+            <h3>相对当前方案，产生真实改善</h3>
+            <p>由真实 A/B 测试确定最小有意义提升 MID，而不是使用工具默认分数。</p>
+            <div class="threshold-formula">下置信界(A)<br>&gt; B + MID</div>
+          </article>
+          <article class="threshold-card">
+            <small>02 · 质量上限线</small>
+            <h3>接近相同条件下的人工参照</h3>
+            <p>允许差距 δ 来自人工评审分歧和用户可接受误差。</p>
+            <div class="threshold-formula">高值：下置信界(A) ≥ H − δ<br>低值：上置信界(A) ≤ H + δ</div>
+          </article>
+          <article class="threshold-card">
+            <small>03 · 风险上限线</small>
+            <h3>最坏情况下仍不突破风险预算</h3>
+            <p>按预计曝光量和评估期可接受事故数计算，不被平均质量抵消。</p>
+            <div class="threshold-formula">Rmax = 可接受事故数 ÷ 预计曝光数<br>上置信界(错误率) ≤ Rmax</div>
+          </article>
+        </div>
+
+        <div class="minimum">
+          <section class="release-gate">
+            <div class="release-title"><h3>最低发布闸门</h3><span class="release-badge">ALL PASS</span></div>
+            <div class="release-row"><b>数据可判定</b><span>真实用户任务、静默主动发现、专家金标和用户理解测试齐备；所有比较使用相同信息截止时间。</span></div>
+            <div class="release-row"><b>30 项全过</b><span>每组 5 个子指标同时达到对应的用户价值线、质量上限线或风险上限线。</span></div>
+            <div class="release-row"><b>6 项全过</b><span>需求命中、应知召回、有效密度、证据支持、不确定性匹配和判断帮助均通过。</span></div>
+            <div class="release-row"><b>分组不失效</b><span>持仓、自选、不同事件类型和主要用户群均过线，不能只看总体平均。</span></div>
+          </section>
+
+          <aside class="blockers">
+            <h3>出现即阻断上线</h3>
+            <ul class="blocker-list">
+              <li>串用其他用户或其他证券的信息。</li>
+              <li>把自选或浏览行为当成真实持仓、成本或风险偏好。</li>
+              <li>严重事实错误、伪造来源或引用不能支持结论。</li>
+              <li>证据不足时给出确定性异动归因。</li>
+              <li>自动修改用户投资逻辑。</li>
+              <li>用户普遍将分析理解为明确交易建议。</li>
+              <li>少推送提高密度，但重大应知信息漏失越线。</li>
+            </ul>
+          </aside>
+        </div>
+
+        <div class="verdict"><strong>最终判断：</strong>如果需求命中和分析可信度通过，但应知信息召回或有效信息密度未通过，产品只能作为财经问答工具限量测试，不能以“个人持仓研究助理”定位正式上线。</div>
+      </div>
+    </section>
+
+    <section class="sources shell">
+      <p class="eyebrow">Measurement references</p>
+      <h2>指标方法来源</h2>
+      <div class="source-grid">
+        <a class="source-link" href="https://trec.nist.gov/pubs/trec29/papers/OVERVIEW.DL.pdf" target="_blank" rel="noreferrer"><span>NIST TREC · Recall 与 nDCG</span><span>↗</span></a>
+        <a class="source-link" href="https://learn.microsoft.com/en-in/azure/ai-foundry/concepts/evaluation-evaluators/rag-evaluators?view=foundry" target="_blank" rel="noreferrer"><span>Microsoft · RAG 质量评估</span><span>↗</span></a>
+        <a class="source-link" href="https://aclanthology.org/2023.emnlp-main.741/" target="_blank" rel="noreferrer"><span>FActScore · 原子事实支持</span><span>↗</span></a>
+        <a class="source-link" href="https://doi.org/10.1145/3705328.3748066" target="_blank" rel="noreferrer"><span>ACM RecSys · 意外价值</span><span>↗</span></a>
+        <a class="source-link" href="https://proceedings.mlr.press/v70/guo17a.html" target="_blank" rel="noreferrer"><span>ICML · 置信度校准</span><span>↗</span></a>
+        <a class="source-link" href="https://proceedings.mlr.press/v206/pugnana23a/pugnana23a.pdf" target="_blank" rel="noreferrer"><span>PMLR · 风险—覆盖评估</span><span>↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">AI 投研助手 · 产品上线评估方案 · 阈值须由真实数据校准</div>
+  </footer>
+</body>
+</html>

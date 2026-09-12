@@ -1,0 +1,2420 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>动态 · AI 投研助手</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #f5f5f7;
+      --paper: #ffffff;
+      --ink: #1d1d1f;
+      --ink-soft: #424245;
+      --muted: #6e6e73;
+      --faint: #86868b;
+      --line: rgba(29, 29, 31, 0.10);
+      --line-strong: rgba(29, 29, 31, 0.16);
+      --blue: #0071e3;
+      --blue-pressed: #0068d1;
+      --blue-wash: rgba(0, 113, 227, 0.08);
+      --green: #248a3d;
+      --green-wash: rgba(36, 138, 61, 0.09);
+      --amber: #9a6700;
+      --amber-wash: rgba(190, 120, 0, 0.10);
+      --red: #d70015;
+      --chrome: rgba(250, 250, 252, 0.78);
+      --sheet: rgba(255, 255, 255, 0.92);
+      --shadow-float: 0 14px 44px rgba(0, 0, 0, 0.09), 0 2px 8px rgba(0, 0, 0, 0.04);
+      --shadow-sheet: -18px 0 60px rgba(0, 0, 0, 0.10), -1px 0 rgba(0, 0, 0, 0.05);
+      --content-width: 760px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+      font-size: 16px;
+      font-optical-sizing: auto;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--canvas);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    button, textarea { font: inherit; }
+
+    button {
+      color: inherit;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button, [role="button"] { touch-action: manipulation; }
+
+    .app-shell {
+      min-height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      background:
+        radial-gradient(circle at 50% -28%, rgba(255, 255, 255, 0.95), transparent 48%),
+        var(--canvas);
+    }
+
+    .chrome {
+      background: var(--chrome);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 30;
+      height: 64px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 20px;
+      padding: 0 24px;
+    }
+
+    .topbar::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      height: 18px;
+      transform: translateY(100%);
+      pointer-events: none;
+      background: linear-gradient(to bottom, rgba(245, 245, 247, 0.78), transparent);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      font-size: 17px;
+      font-weight: 660;
+      letter-spacing: -0.025em;
+    }
+
+    .brand-mark {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--ink);
+      color: white;
+      box-shadow: inset 0 1px rgba(255, 255, 255, 0.16);
+    }
+
+    .brand-mark svg { width: 15px; height: 15px; }
+
+    .top-actions {
+      justify-self: end;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .pressable {
+      border: 0;
+      cursor: pointer;
+      transition: transform 180ms cubic-bezier(.2, .8, .2, 1), background-color 180ms ease, color 180ms ease;
+    }
+
+    .pressable:active {
+      transform: scale(0.97);
+      transition: transform 100ms ease-out;
+    }
+
+    .icon-button {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--ink-soft);
+    }
+
+    .icon-button:hover { background: rgba(0, 0, 0, 0.045); }
+    .icon-button svg { width: 19px; height: 19px; }
+
+    .asset-control { position: relative; justify-self: center; }
+
+    .asset-switcher {
+      min-width: 210px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 0 12px 0 14px;
+      border: 1px solid rgba(29, 29, 31, 0.08);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.64);
+      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03), inset 0 1px rgba(255, 255, 255, 0.65);
+      font-size: 14px;
+      font-weight: 580;
+      letter-spacing: -0.01em;
+    }
+
+    .asset-switcher:hover { background: rgba(255, 255, 255, 0.9); }
+    .asset-switcher svg { width: 14px; height: 14px; color: var(--muted); }
+
+    .asset-popover {
+      position: absolute;
+      top: calc(100% + 9px);
+      left: 50%;
+      width: 288px;
+      padding: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.68);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(28px) saturate(180%);
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      box-shadow: var(--shadow-float);
+      transform: translate(-50%, -8px) scale(0.97);
+      transform-origin: 50% 0;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 260ms cubic-bezier(.2, .8, .2, 1);
+    }
+
+    .asset-popover.is-open {
+      transform: translate(-50%, 0) scale(1);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .asset-option {
+      width: 100%;
+      min-height: 52px;
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 9px;
+      border: 0;
+      border-radius: 12px;
+      background: transparent;
+      text-align: left;
+    }
+
+    .asset-option:hover { background: rgba(0, 0, 0, 0.045); }
+    .asset-option[aria-checked="true"] { background: var(--blue-wash); }
+
+    .asset-avatar {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      color: white;
+      font-size: 12px;
+      font-weight: 720;
+      letter-spacing: -0.02em;
+    }
+
+    .asset-avatar.tencent { background: linear-gradient(145deg, #2f80ed, #1463c7); }
+    .asset-avatar.moutai { background: linear-gradient(145deg, #c52233, #8d1220); }
+
+    .asset-name { display: block; font-size: 14px; font-weight: 620; }
+    .asset-kind { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .checkmark { color: var(--blue); opacity: 0; }
+    .asset-option[aria-checked="true"] .checkmark { opacity: 1; }
+
+    .popover-divider { height: 1px; margin: 7px 8px; background: var(--line); }
+
+    .manage-assets {
+      width: 100%;
+      height: 42px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--blue);
+      text-align: left;
+      font-size: 14px;
+      font-weight: 560;
+    }
+
+    .manage-assets:hover { background: var(--blue-wash); }
+
+    .workspace { position: relative; min-height: 0; }
+
+    .conversation-scroll {
+      height: 100%;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+
+    .conversation {
+      width: min(var(--content-width), calc(100% - 48px));
+      min-height: 100%;
+      margin: 0 auto;
+      padding: 74px 0 188px;
+    }
+
+    .context-line {
+      display: flex;
+      align-items: baseline;
+      gap: 9px;
+      margin-bottom: 34px;
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.005em;
+    }
+
+    .context-line strong { color: var(--ink-soft); font-weight: 620; }
+    .context-dot { color: #b7b7bc; }
+
+    .feed-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: -12px 0 38px;
+      padding: 11px 13px 11px 15px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(255,255,255,.52);
+    }
+
+    .feed-status { display: flex; align-items: center; gap: 9px; color: var(--ink-soft); font-size: 12px; font-weight: 590; }
+    .feed-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px var(--blue-wash); }
+    .simulate-button { min-height: 32px; padding: 0 11px; border: 0; border-radius: 10px; background: var(--blue-wash); color: var(--blue); font-size: 12px; font-weight: 640; cursor: pointer; }
+
+    .push-message {
+      margin-bottom: 34px;
+      padding: 17px 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.56);
+      animation: materialize 260ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    .push-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+    .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px var(--blue-wash); }
+    .push-priority { padding: 3px 7px; border-radius: 999px; background: var(--amber-wash); color: var(--amber); font-weight: 640; }
+    .push-message h2 { margin-top: 12px; }
+    .push-summary { margin: 9px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.62; }
+    .push-reason { margin: 12px 0 0; padding-top: 11px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    .thinking-state { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+    .thinking-dots { display: inline-flex; gap: 3px; }
+    .thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--muted); animation: thinking 1s ease-in-out infinite; }
+    .thinking-dots i:nth-child(2) { animation-delay: .14s; }
+    .thinking-dots i:nth-child(3) { animation-delay: .28s; }
+    @keyframes thinking { 0%, 70%, 100% { opacity: .28; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-2px); } }
+
+    .stream-cursor::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -.15em; background: var(--blue); animation: blink .8s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .stopped-note { margin-top: 10px; color: var(--muted); font-size: 11px; }
+
+    .message { position: relative; margin: 0 0 38px; }
+
+    .message.assistant { padding-right: 34px; }
+
+    .assistant-kicker {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 13px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 590;
+      letter-spacing: 0.035em;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 0 4px var(--amber-wash);
+    }
+
+    .status-dot.uncertain { background: var(--faint); box-shadow: 0 0 0 4px rgba(110, 110, 115, 0.10); }
+    .status-dot.support { background: var(--green); box-shadow: 0 0 0 4px var(--green-wash); }
+
+    .message h1 {
+      max-width: 700px;
+      margin: 0;
+      font-size: clamp(29px, 3vw, 38px);
+      line-height: 1.17;
+      letter-spacing: -0.034em;
+      font-weight: 680;
+    }
+
+    .message h2 {
+      margin: 0;
+      font-size: 21px;
+      line-height: 1.3;
+      letter-spacing: -0.022em;
+      font-weight: 650;
+    }
+
+    .lede {
+      max-width: 660px;
+      margin: 19px 0 0;
+      color: var(--ink-soft);
+      font-size: 17px;
+      line-height: 1.65;
+      letter-spacing: -0.006em;
+    }
+
+    .impact-line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 23px;
+      color: var(--ink-soft);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .impact-pill {
+      flex: 0 0 auto;
+      padding: 5px 9px;
+      border-radius: 999px;
+      color: var(--amber);
+      background: var(--amber-wash);
+      font-size: 12px;
+      font-weight: 660;
+      letter-spacing: .01em;
+    }
+
+    .impact-pill.uncertain { color: var(--muted); background: rgba(110,110,115,.09); }
+    .impact-pill.support { color: var(--green); background: var(--green-wash); }
+
+    .message-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 27px;
+    }
+
+    .text-button, .prompt-chip {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.66);
+      color: var(--ink-soft);
+      font-size: 13px;
+      font-weight: 570;
+    }
+
+    .prompt-chip { padding: 0 14px; }
+    .text-button { padding: 0 12px; color: var(--blue); }
+    .prompt-chip:hover, .text-button:hover { background: white; border-color: var(--line-strong); }
+
+    .user-message {
+      width: fit-content;
+      max-width: 72%;
+      margin-left: auto;
+      padding: 11px 15px;
+      border-radius: 18px 18px 5px 18px;
+      background: var(--ink);
+      color: white;
+      font-size: 15px;
+      line-height: 1.55;
+      box-shadow: 0 3px 10px rgba(0,0,0,.08);
+    }
+
+    .answer-copy {
+      max-width: 680px;
+      color: var(--ink-soft);
+      font-size: 16px;
+      line-height: 1.72;
+    }
+
+    .answer-copy p { margin: 0 0 14px; }
+
+    .analysis {
+      max-width: 680px;
+      margin-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    .analysis[hidden] { display: none; }
+
+    .analysis-row {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 18px;
+      padding: 17px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .analysis-label { color: var(--muted); font-size: 13px; font-weight: 620; }
+    .analysis-value { color: var(--ink-soft); font-size: 14px; line-height: 1.65; }
+
+    .source-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .source-line button {
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--blue);
+      cursor: pointer;
+    }
+
+    .composer-dock {
+      position: absolute;
+      z-index: 20;
+      inset: auto 0 0;
+      padding: 32px 24px 22px;
+      pointer-events: none;
+      background: linear-gradient(to top, var(--canvas) 46%, rgba(245,245,247,0.88) 70%, transparent);
+    }
+
+    .composer {
+      position: relative;
+      width: min(var(--content-width), calc(100% - 48px));
+      min-height: 62px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: 12px;
+      margin: 0 auto;
+      padding: 10px 10px 10px 18px;
+      border: 1px solid rgba(29,29,31,.11);
+      border-radius: 22px;
+      background: rgba(255,255,255,.82);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      box-shadow: var(--shadow-float);
+      pointer-events: auto;
+    }
+
+    .composer:focus-within { border-color: rgba(0,113,227,.38); box-shadow: 0 14px 44px rgba(0,0,0,.09), 0 0 0 4px rgba(0,113,227,.08); }
+
+    .composer textarea {
+      width: 100%;
+      min-height: 40px;
+      max-height: 128px;
+      padding: 9px 0 7px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    .composer textarea::placeholder { color: #9a9aa0; }
+
+    .send-button {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 13px;
+      background: var(--blue);
+      color: white;
+      box-shadow: inset 0 1px rgba(255,255,255,.22);
+    }
+
+    .send-button:hover { background: var(--blue-pressed); }
+    .send-button svg { width: 17px; height: 17px; }
+    .send-button.is-generating { background: var(--ink); }
+    .send-button.is-generating svg { width: 12px; height: 12px; }
+
+    .composer-note {
+      width: min(var(--content-width), calc(100% - 48px));
+      margin: 8px auto 0;
+      color: var(--faint);
+      text-align: center;
+      font-size: 11px;
+      letter-spacing: .005em;
+      pointer-events: auto;
+    }
+
+    .sheet {
+      position: fixed;
+      z-index: 50;
+      inset: 0 0 0 auto;
+      width: min(560px, 96vw);
+      display: grid;
+      grid-template-rows: auto minmax(0,1fr);
+      border-left: 1px solid rgba(255,255,255,.7);
+      background: var(--sheet);
+      backdrop-filter: blur(30px) saturate(170%);
+      -webkit-backdrop-filter: blur(30px) saturate(170%);
+      box-shadow: var(--shadow-sheet);
+      transform: translate3d(104%, 0, 0);
+      opacity: .96;
+      visibility: hidden;
+      transition: transform 380ms cubic-bezier(.2,.8,.2,1), opacity 260ms ease, visibility 0s linear 380ms;
+      will-change: transform;
+    }
+
+    .sheet.is-open {
+      transform: translate3d(0, 0, 0);
+      opacity: 1;
+      visibility: visible;
+      transition: transform 380ms cubic-bezier(.2,.8,.2,1), opacity 260ms ease;
+    }
+
+    .sheet-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 72px;
+      padding: 16px 18px 10px 24px;
+    }
+
+    .sheet-title { margin: 0; font-size: 20px; line-height: 1.25; letter-spacing: -.025em; font-weight: 670; }
+    .sheet-body { overflow: auto; padding: 10px 24px 40px; }
+
+    .sheet-intro { margin: 0 0 25px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+
+    .detail-section { padding: 20px 0; border-top: 1px solid var(--line); }
+    .detail-section:first-of-type { border-top: 0; padding-top: 2px; }
+    .detail-section h3 { margin: 0 0 9px; font-size: 14px; line-height: 1.4; letter-spacing: -.01em; }
+    .detail-section p { margin: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.65; }
+
+    .detail-eyebrow {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .evidence-meta { display: flex; gap: 8px; margin-top: 11px; color: var(--muted); font-size: 12px; }
+    .evidence-quote { margin-top: 13px !important; padding-left: 13px; border-left: 2px solid var(--line-strong); }
+    .source-record-relates { margin-top: 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    .data-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 5px;
+      margin: -2px -5px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-variant-numeric: tabular-nums;
+      cursor: pointer;
+    }
+
+    .data-link:hover { background: var(--blue-wash); color: var(--blue); }
+    .data-link::after { content: "↗"; font-size: .72em; color: var(--blue); opacity: .72; }
+
+    .conclusion-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 23px;
+    }
+
+    .conclusion-row .impact-line { margin-top: 0; }
+
+    .detail-link {
+      min-height: 30px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 9px;
+      background: var(--blue-wash);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .sheet-heading-group { min-width: 0; }
+    .sheet-context { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 520; }
+    .sheet-header-actions { display: flex; align-items: center; gap: 4px; }
+
+    .sheet-back {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--blue);
+      cursor: pointer;
+    }
+
+    .sheet-back:hover { background: var(--blue-wash); }
+    .sheet-back svg { width: 18px; height: 18px; }
+
+    .archive-tabs {
+      position: sticky;
+      z-index: 4;
+      top: -10px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 3px;
+      margin: 0 0 24px;
+      padding: 3px;
+      border-radius: 12px;
+      background: rgba(118,118,128,.12);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .archive-tab {
+      min-height: 32px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 610;
+      cursor: pointer;
+    }
+
+    .archive-tab[aria-selected="true"] {
+      background: rgba(255,255,255,.94);
+      color: var(--ink);
+      box-shadow: 0 1px 4px rgba(0,0,0,.1);
+    }
+
+    .archive-panel { animation: materialize 220ms cubic-bezier(.2,.8,.2,1); }
+
+    @keyframes materialize {
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .archive-summary {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: start;
+      padding: 18px;
+      margin-bottom: 22px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.58);
+    }
+
+    .archive-summary strong { display: block; font-size: 16px; line-height: 1.4; }
+    .archive-summary p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .confidence-value { color: var(--green); font-size: 22px; line-height: 1; font-weight: 680; font-variant-numeric: tabular-nums; }
+    .confidence-label { display: block; margin-top: 6px; color: var(--muted); text-align: right; font-size: 10px; }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric-card {
+      min-height: 92px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(255,255,255,.58);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .metric-card:hover { border-color: rgba(0,113,227,.25); background: rgba(255,255,255,.92); }
+    .metric-card-label { display: block; color: var(--muted); font-size: 11px; font-weight: 620; }
+    .metric-card-value { display: block; margin-top: 8px; font-size: 20px; font-weight: 670; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+    .metric-card-delta { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .metric-card-delta.up { color: var(--red); }
+    .metric-card-delta.down { color: var(--green); }
+
+    .chart-hero { margin-bottom: 18px; }
+    .chart-hero-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .chart-hero-value { margin-top: 4px; font-size: 30px; font-weight: 700; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+    .chart-hero-meta { margin-top: 5px; color: var(--muted); font-size: 12px; }
+
+    .chart-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .period-control { display: flex; gap: 3px; padding: 3px; border-radius: 10px; background: rgba(118,118,128,.12); }
+    .period-button { min-width: 42px; min-height: 29px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 620; cursor: pointer; }
+    .period-button[aria-pressed="true"] { background: white; color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.09); }
+    .chart-status { color: var(--muted); font-size: 11px; }
+
+    .chart-shell {
+      position: relative;
+      overflow: hidden;
+      padding: 10px 8px 4px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.64);
+    }
+
+    .chart-svg { display: block; width: 100%; height: auto; min-height: 290px; }
+    .chart-grid-line { stroke: rgba(29,29,31,.075); stroke-width: 1; }
+    .chart-axis-label { fill: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+    .chart-candle-up { fill: var(--red); stroke: var(--red); }
+    .chart-candle-down { fill: var(--green); stroke: var(--green); }
+    .chart-volume { fill: rgba(0,113,227,.15); }
+    .chart-ma { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .chart-event-line { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 3 3; }
+    .chart-event-dot { fill: white; stroke: var(--amber); stroke-width: 1.5; }
+
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 14px; padding: 12px 4px 4px; color: var(--muted); font-size: 10px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+    .legend-swatch { width: 14px; height: 2px; border-radius: 2px; background: var(--blue); }
+    .legend-swatch.volume { height: 7px; background: rgba(0,113,227,.18); }
+    .legend-swatch.event { background: var(--amber); }
+
+    .event-list { display: grid; gap: 8px; margin-top: 12px; }
+    .event-item { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px 12px; border-radius: 12px; background: rgba(154,103,0,.07); }
+    .event-date { color: var(--amber); font-size: 10px; font-weight: 670; }
+    .event-title { color: var(--ink-soft); font-size: 12px; line-height: 1.45; }
+
+    .reasoning-chain { display: grid; gap: 0; }
+    .reasoning-node { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 12px; padding: 0 0 20px; }
+    .reasoning-node:last-child { padding-bottom: 0; }
+    .reasoning-rail { position: relative; display: flex; justify-content: center; }
+    .reasoning-rail::after { content: ""; position: absolute; top: 20px; bottom: -2px; width: 1px; background: var(--line-strong); }
+    .reasoning-node:last-child .reasoning-rail::after { display: none; }
+    .reasoning-index { position: relative; z-index: 1; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; background: rgba(255,255,255,.96); color: var(--muted); font-size: 10px; font-weight: 690; }
+    .reasoning-content { padding: 2px 0 0; }
+    .reasoning-kind { color: var(--muted); font-size: 10px; font-weight: 680; letter-spacing: .04em; }
+    .reasoning-content h3 { margin: 5px 0 6px; font-size: 14px; line-height: 1.42; }
+    .reasoning-content p { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.58; }
+    .citation-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+    .citation-button, .source-chip {
+      min-height: 28px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: rgba(255,255,255,.66);
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    a.source-chip { display: inline-flex; align-items: center; }
+    .citation-button:hover, .source-chip:hover { border-color: rgba(0,113,227,.28); background: white; }
+    .source-chip[aria-disabled="true"] { color: var(--muted); cursor: not-allowed; }
+
+    .uncertainty-callout { padding: 14px; border-radius: 14px; background: var(--amber-wash); }
+    .uncertainty-callout strong { display: block; color: var(--amber); font-size: 12px; }
+    .uncertainty-callout p { margin: 6px 0 0; color: var(--ink-soft); font-size: 12px; line-height: 1.55; }
+
+    .source-card { padding: 16px 0; border-top: 1px solid var(--line); }
+    .source-card:first-child { border-top: 0; padding-top: 0; }
+    .source-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .source-card h3 { margin: 5px 0 0; font-size: 14px; line-height: 1.45; }
+    .source-state { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; background: var(--green-wash); color: var(--green); font-size: 10px; font-weight: 650; }
+    .source-state.offline { background: rgba(110,110,115,.09); color: var(--muted); }
+    .source-related { margin-top: 9px; color: var(--muted); font-size: 11px; }
+
+    .primary-button, .secondary-button {
+      min-height: 42px;
+      padding: 0 16px;
+      border-radius: 13px;
+      font-size: 14px;
+      font-weight: 620;
+    }
+
+    .primary-button { display: inline-flex; align-items: center; justify-content: center; border: 0; background: var(--blue); color: white; text-decoration: none; }
+    .secondary-button { border: 1px solid var(--line); background: rgba(255,255,255,.7); color: var(--ink-soft); }
+    .secondary-button:disabled { opacity: .48; cursor: not-allowed; }
+    .button-row { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 18px; }
+
+    .sheet-textarea {
+      width: 100%;
+      min-height: 118px;
+      margin-top: 10px;
+      padding: 12px 13px;
+      resize: vertical;
+      border: 1px solid var(--line-strong);
+      border-radius: 13px;
+      outline: 0;
+      background: rgba(255,255,255,.74);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .sheet-textarea:focus { border-color: rgba(0,113,227,.46); box-shadow: 0 0 0 4px rgba(0,113,227,.08); }
+
+    .managed-asset {
+      display: grid;
+      grid-template-columns: 38px 1fr auto;
+      align-items: center;
+      gap: 11px;
+      padding: 13px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .managed-asset:first-child { border-top: 0; }
+    .managed-asset strong { display: block; font-size: 14px; }
+    .managed-asset small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .setting-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 18px;
+      min-height: 58px;
+      border-top: 1px solid var(--line);
+    }
+
+    .setting-row:first-child { border-top: 0; }
+    .setting-copy strong { display: block; font-size: 14px; }
+    .setting-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+    .switch {
+      position: relative;
+      width: 42px;
+      height: 26px;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: #d1d1d6;
+    }
+
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0,0,0,.2);
+      transition: transform 220ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    .switch[aria-checked="true"] { background: #34c759; }
+    .switch[aria-checked="true"]::after { transform: translateX(16px); }
+
+    .toast {
+      position: fixed;
+      z-index: 80;
+      left: 50%;
+      bottom: 26px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: rgba(29,29,31,.88);
+      backdrop-filter: blur(16px);
+      color: white;
+      font-size: 13px;
+      transform: translate(-50%, 18px);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 260ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease;
+    }
+
+    .toast.is-visible { transform: translate(-50%, 0); opacity: 1; }
+
+    .tour-layer {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .tour-layer[hidden] { display: none; }
+
+    .tour-mask {
+      position: fixed;
+      z-index: 100;
+      background: rgba(0, 0, 0, 0.58);
+      pointer-events: auto;
+      transition: inset 360ms cubic-bezier(.2,.8,.2,1), width 360ms cubic-bezier(.2,.8,.2,1), height 360ms cubic-bezier(.2,.8,.2,1), opacity 180ms ease;
+      will-change: inset, width, height;
+    }
+
+    .tour-focus-ring {
+      position: fixed;
+      z-index: 101;
+      border: 2px solid rgba(255, 255, 255, 0.94);
+      border-radius: 16px;
+      box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.16), 0 9px 32px rgba(0,0,0,.16);
+      pointer-events: none;
+      transition: inset 360ms cubic-bezier(.2,.8,.2,1), width 360ms cubic-bezier(.2,.8,.2,1), height 360ms cubic-bezier(.2,.8,.2,1), border-radius 260ms ease;
+      will-change: inset, width, height;
+    }
+
+    .tour-blocker {
+      position: fixed;
+      z-index: 102;
+      background: transparent;
+      pointer-events: auto;
+    }
+
+    .tour-popover {
+      position: fixed;
+      z-index: 103;
+      width: min(324px, calc(100vw - 32px));
+      padding: 18px;
+      border: 1px solid rgba(255,255,255,.82);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      box-shadow: 0 20px 54px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.08);
+      pointer-events: auto;
+      transform-origin: 50% 50%;
+      transition: left 360ms cubic-bezier(.2,.8,.2,1), top 360ms cubic-bezier(.2,.8,.2,1), transform 180ms ease, opacity 180ms ease;
+      will-change: left, top;
+    }
+
+    .tour-layer:not(.is-active) .tour-mask,
+    .tour-layer:not(.is-active) .tour-focus-ring,
+    .tour-layer:not(.is-active) .tour-popover {
+      opacity: 0;
+    }
+
+    .tour-layer:not(.is-active) .tour-popover { transform: translateY(5px) scale(.985); }
+
+    .tour-popover::before {
+      content: "";
+      position: absolute;
+      left: var(--tour-arrow-left, 50%);
+      width: 14px;
+      height: 14px;
+      background: rgba(255,255,255,.96);
+      border: solid rgba(255,255,255,.82);
+      transform: translateX(-50%) rotate(45deg);
+    }
+
+    .tour-popover[data-placement="bottom"]::before {
+      top: -8px;
+      border-width: 1px 0 0 1px;
+    }
+
+    .tour-popover[data-placement="top"]::before {
+      bottom: -8px;
+      border-width: 0 1px 1px 0;
+    }
+
+    .tour-step {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: .04em;
+    }
+
+    .tour-title {
+      margin: 8px 0 0;
+      font-size: 19px;
+      line-height: 1.25;
+      letter-spacing: -.025em;
+      font-weight: 680;
+    }
+
+    .tour-body {
+      margin: 9px 0 0;
+      color: var(--ink-soft);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .tour-actions {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .tour-skip, .tour-back, .tour-next {
+      min-height: 36px;
+      border-radius: 11px;
+      font-size: 13px;
+      font-weight: 620;
+    }
+
+    .tour-skip {
+      justify-self: start;
+      padding: 0 5px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .tour-back { padding: 0 12px; border: 1px solid var(--line); background: rgba(0,0,0,.035); color: var(--ink-soft); }
+    .tour-next { min-width: 72px; padding: 0 14px; border: 0; background: var(--blue); color: white; }
+    .tour-next:hover { background: var(--blue-pressed); }
+
+    :focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--blue) 42%, transparent);
+      outline-offset: 3px;
+    }
+
+    @media (max-width: 860px) {
+      .topbar { grid-template-columns: auto 1fr auto; padding: 0 16px; }
+      .brand span:last-child { display: none; }
+      .asset-switcher { min-width: 0; max-width: 220px; }
+      .conversation { width: min(100% - 32px, var(--content-width)); padding-top: 48px; }
+      .composer { width: min(100% - 32px, var(--content-width)); }
+      .composer-note { width: min(100% - 32px, var(--content-width)); }
+      .sheet { width: min(520px, 100vw); }
+    }
+
+    @media (max-width: 560px) {
+      .metric-grid { grid-template-columns: 1fr; }
+      .archive-summary { grid-template-columns: 1fr; }
+      .confidence-label { text-align: left; }
+      .feed-toolbar { align-items: flex-start; }
+      .chart-svg { min-height: 250px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+      .sheet { transform: none; opacity: 0; }
+      .sheet.is-open { opacity: 1; }
+      .tour-popover, .tour-focus-ring, .tour-mask {
+        transform: none;
+        transition-property: opacity;
+      }
+      .thinking-dots i, .stream-cursor::after { animation: none; }
+    }
+
+    @media (prefers-reduced-transparency: reduce) {
+      .chrome, .asset-popover, .composer, .sheet, .toast {
+        background: #fff;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+      .tour-popover { background: #fff; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    }
+
+    @media (prefers-contrast: more) {
+      :root { --line: #1d1d1f; --line-strong: #000; }
+      .chrome, .asset-popover, .composer, .sheet { background: #fff; }
+      .text-button, .prompt-chip, .asset-switcher { border-color: #1d1d1f; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar chrome">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 9.2 6l3.1 7.3 2.1-4.8L19 19" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span>动态</span>
+      </div>
+      <div class="asset-control">
+        <button id="asset-switcher" class="asset-switcher pressable" type="button" aria-haspopup="listbox" aria-expanded="false" data-tour="asset">
+          <span id="asset-switcher-label">腾讯控股 · 持仓</span>
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m6 8 4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="asset-popover" id="asset-popover" role="listbox" aria-label="选择标的"></div>
+      </div>
+      <div class="top-actions">
+        <button class="icon-button pressable" type="button" data-start-tour aria-label="使用指引" title="使用指引">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M9.7 9a2.45 2.45 0 0 1 4.75.8c0 1.7-2.45 2-2.45 3.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg>
+        </button>
+        <button class="icon-button pressable" type="button" data-sheet="archive" data-tour="archive" aria-label="研究档案" title="研究档案">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.5 18.5h7M9 21h6M8 14.2a6.5 6.5 0 1 1 8 0c-1 .75-1.35 1.55-1.5 2.3h-5c-.15-.75-.5-1.55-1.5-2.3Z" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-button pressable" type="button" data-sheet="settings" aria-label="设置" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.65"/><path d="M19 13.2v-2.4l-2.1-.7a7 7 0 0 0-.6-1.4l1-2-1.7-1.7-2 1a7 7 0 0 0-1.4-.6L11.5 3h-2.4l-.7 2.1a7 7 0 0 0-1.4.6l-2-1-1.7 1.7 1 2a7 7 0 0 0-.6 1.4l-2.1.7v2.4l2.1.7a7 7 0 0 0 .6 1.4l-1 2L5 18.7l2-1a7 7 0 0 0 1.4.6l.7 2.1h2.4l.7-2.1a7 7 0 0 0 1.4-.6l2 1 1.7-1.7-1-2a7 7 0 0 0 .6-1.4l2.1-.7Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="workspace">
+      <div class="conversation-scroll">
+        <main id="conversation" class="conversation" aria-live="polite"></main>
+      </div>
+      <div class="composer-dock">
+        <form id="composer" class="composer chrome" data-tour="composer">
+          <textarea name="prompt" aria-label="继续追问" placeholder="继续问关于当前标的的问题…"></textarea>
+          <button class="send-button pressable" type="submit" aria-label="发送">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </form>
+        <p class="composer-note">模拟数据仅用于产品交互演示，不构成投资建议</p>
+      </div>
+    </div>
+  </div>
+  <aside id="detail-sheet" class="sheet" role="dialog" aria-modal="false" aria-hidden="true" aria-labelledby="sheet-title" tabindex="-1"></aside>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="tour-layer" class="tour-layer" hidden>
+    <div class="tour-mask tour-mask-top"></div>
+    <div class="tour-mask tour-mask-left"></div>
+    <div class="tour-mask tour-mask-right"></div>
+    <div class="tour-mask tour-mask-bottom"></div>
+    <div id="tour-focus-ring" class="tour-focus-ring"></div>
+    <div id="tour-blocker" class="tour-blocker" aria-hidden="true"></div>
+    <section id="tour-popover" class="tour-popover" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body"></section>
+  </div>
+  <template id="asset-options">
+    <span>腾讯控股 · 持仓</span>
+    <span>贵州茅台 · 自选</span>
+  </template>
+  <script>
+    const tourSteps = [
+      { target: '[data-tour="asset"]', title: "选择标的", body: "这里只显示你的持仓和自选。点击可切换当前研究标的。" },
+      { target: '[data-tour="dynamic"]', title: "查看动态", body: "先看今天最重要的变化，以及它是否影响你原来的判断。" },
+      { target: '[data-tour="actions"]', title: "继续理解", body: "点击快捷问题继续追问；展开分析可区分事实、推断和未知。" },
+      { target: '[data-tour="composer"]', title: "自由追问", body: "有其他问题，直接在这里输入。回答会继承当前标的和证据。" },
+      { target: '[data-tour="archive"]', title: "研究档案", body: "在这里核验判断、数据、推断与来源。页面里的数值和结论也能直接定位到对应依据。" }
+    ];
+
+    function buildMarketSeries(seed, basePrice, count = 96) {
+      const points = [];
+      const end = new Date("2026-09-08T12:00:00");
+      const dates = [];
+      const cursor = new Date(end);
+      while (dates.length < count) {
+        if (cursor.getDay() !== 0 && cursor.getDay() !== 6) dates.unshift(new Date(cursor));
+        cursor.setDate(cursor.getDate() - 1);
+      }
+      let last = basePrice * .83;
+      dates.forEach((date, index) => {
+        const wave = Math.sin((index + seed) * .39) * .011 + Math.cos((index + seed * 2) * .17) * .007;
+        const drift = .0018 + Math.sin((index + seed) * .071) * .0016;
+        const open = last * (1 + Math.sin(index * .73 + seed) * .004);
+        const close = open * (1 + wave + drift);
+        const spread = .008 + Math.abs(Math.sin(index * .51 + seed)) * .009;
+        points.push({
+          date: date.toISOString().slice(0, 10),
+          open,
+          high: Math.max(open, close) * (1 + spread),
+          low: Math.min(open, close) * (1 - spread * .82),
+          close,
+          volume: Math.round((18 + Math.abs(Math.sin(index * .31 + seed)) * 24 + (index % 13 === 0 ? 19 : 0)) * 1000000)
+        });
+        last = close;
+      });
+      const ratio = basePrice / points.at(-1).close;
+      return points.map(point => ({
+        ...point,
+        open: +(point.open * ratio).toFixed(2),
+        high: +(point.high * ratio).toFixed(2),
+        low: +(point.low * ratio).toFixed(2),
+        close: +(point.close * ratio).toFixed(2)
+      }));
+    }
+
+    const assets = {
+      TCEHY: {
+        id: "TCEHY",
+        code: "0700.HK",
+        name: "腾讯控股",
+        short: "腾讯",
+        kind: "持仓",
+        avatarClass: "tencent",
+        price: "HK$ 625.50",
+        change: "−1.8%",
+        updated: "今天 15:40",
+        status: "值得留意",
+        statusClass: "",
+        headline: "海外游戏收入继续增长，利润率改善仍需验证",
+        lede: "最新披露支持了你对海外业务增长的关注，但现有信息还不足以说明增长能否稳定转化为更高利润。",
+        thesis: {
+          core: "海外游戏业务增长能够抵消国内增速放缓，并改善长期增长质量。",
+          watch: "海外游戏收入增速、毛利率、销售费用率",
+          invalid: "连续两个披露周期海外游戏增速低于预期，且利润率持续下降。",
+          horizon: "未来 4–6 个季度",
+          state: "已由你确认"
+        },
+        analysis: {
+          facts: "公司季度业绩公告显示，海外游戏收入同比增长 23%；本季度整体毛利率较上季度下降 0.8 个百分点。",
+          inference: "海外收入增长支持了原判断的一部分，但利润率承压意味着增长质量仍需继续验证。",
+          unknown: "目前无法区分利润率变化主要来自内容投入、渠道成本还是业务结构变化。",
+          next: "管理层对利润率变化的解释、下一季度海外业务盈利表现及费用率。"
+        },
+        sources: [
+          { level: "一级来源", title: "腾讯控股季度业绩公告（模拟）", time: "今天 15:18", quote: "国际市场游戏收入同比增长 23%，主要受多款长青游戏表现推动。" },
+          { level: "二级来源", title: "港股收市行情数据（模拟）", time: "今天 16:01", quote: "腾讯控股收报 625.50 港元，较上一交易日收盘下跌 1.8%。" }
+        ],
+        prompts: ["为什么重要？", "查看证据", "这会影响我原来的判断吗？"]
+      },
+      "600519": {
+        id: "600519",
+        code: "600519.SH",
+        name: "贵州茅台",
+        short: "茅台",
+        kind: "自选",
+        avatarClass: "moutai",
+        price: "¥ 1,488.20",
+        change: "+0.6%",
+        updated: "今天 15:00",
+        status: "信息不足",
+        statusClass: "uncertain",
+        headline: "盘中成交有所放大，暂未发现可确认的单一原因",
+        lede: "价格与成交量出现变化，但同期没有新的公司公告。公开讨论中的几个解释都缺少足够证据。",
+        thesis: {
+          core: "品牌力与渠道调整能够支撑核心产品的长期需求和价格体系。",
+          watch: "批价、渠道库存、直营收入占比",
+          invalid: "核心产品批价和动销持续走弱，且渠道库存连续两个季度上升。",
+          horizon: "未来 6–8 个季度",
+          state: "草稿，尚未确认"
+        },
+        analysis: {
+          facts: "今日收盘上涨 0.6%，成交额较近 20 个交易日均值高 18%；公司同期未发布新公告。",
+          inference: "行业政策讨论和渠道反馈可能影响市场情绪，但都不能单独解释本次价格变化。",
+          unknown: "没有权威来源确认本次波动的直接原因，暂不能判断是否与基本面变化有关。",
+          next: "公司正式披露、批价连续变化、渠道库存数据与下一次经营数据更新。"
+        },
+        sources: [
+          { level: "二级来源", title: "A 股收市行情数据（模拟）", time: "今天 15:05", quote: "贵州茅台收报 1,488.20 元，成交额较近 20 日均值增加 18%。" },
+          { level: "信息线索", title: "行业渠道讨论汇总（模拟）", time: "今天 14:36", quote: "多方讨论指向渠道价格变化，但尚无公司公告或权威数据支持单一解释。" }
+        ],
+        prompts: ["为什么不能确认原因？", "查看相关信息", "后续需要观察什么？"]
+      }
+    };
+
+    const researchData = {
+      TCEHY: {
+        metrics: {
+          price: { label: "最新价", value: "HK$ 625.50", delta: "当日 −1.8%", tone: "down", sourceId: "market-close" },
+          change: { label: "当日涨跌", value: "−1.8%", delta: "近 20 日波动率 24.6%", tone: "down", sourceId: "market-close" },
+          volume: { label: "成交量", value: "2,864 万股", delta: "较 20 日均值 +31%", tone: "up", sourceId: "market-close" },
+          turnover: { label: "成交额", value: "HK$ 179.2 亿", delta: "市场活跃度偏高", tone: "up", sourceId: "market-close" },
+          valuation: { label: "预测市盈率", value: "19.8×", delta: "近 3 年分位 57%", tone: "", sourceId: "valuation-model" },
+          revenue: { label: "海外游戏收入", value: "+23%", delta: "同比增速 +7pct", tone: "up", sourceId: "earnings-release" },
+          margin: { label: "整体毛利率", value: "52.1%", delta: "环比 −0.8pct", tone: "down", sourceId: "earnings-release" },
+          expense: { label: "销售费用率", value: "8.7%", delta: "同比 +0.4pct", tone: "down", sourceId: "earnings-release" }
+        },
+        events: [
+          { index: 14, title: "发布长青游戏内容更新", tone: "info", sourceId: "product-update" },
+          { index: 33, title: "季度业绩披露", tone: "important", sourceId: "earnings-release" },
+          { index: 52, title: "管理层业绩说明会", tone: "important", sourceId: "earnings-call" },
+          { index: 74, title: "港股科技板块整体回调", tone: "market", sourceId: "market-close" },
+          { index: 92, title: "成交量显著放大", tone: "market", sourceId: "market-close" }
+        ],
+        sources: [
+          { id: "earnings-release", level: "一级来源", type: "external", title: "腾讯控股季度业绩公告（模拟）", publisher: "公司公告", time: "今天 15:18", quote: "国际市场游戏收入同比增长 23%，主要受多款长青游戏表现推动。", url: "https://www.tencent.com/zh-cn/investors.html", status: "available", relates: "海外游戏收入、毛利率、销售费用率" },
+          { id: "earnings-call", level: "一级来源", type: "external", title: "季度业绩说明会纪要（模拟）", publisher: "公司管理层", time: "今天 16:20", quote: "公司将继续投入内容与发行能力，短期费用节奏可能存在波动。", url: "https://www.tencent.com/zh-cn/investors.html", status: "available", relates: "利润率解释、费用节奏" },
+          { id: "market-close", level: "结构化数据", type: "internal", title: "港股收市行情数据（模拟）", publisher: "站内行情库", time: "今天 16:01", quote: "腾讯控股收报 625.50 港元，成交量较 20 日均值增加 31%。", status: "available", metricKey: "price", relates: "价格、涨跌幅、成交量、成交额" },
+          { id: "valuation-model", level: "结构化数据", type: "internal", title: "一致预期估值快照（模拟）", publisher: "站内估值模型", time: "今天 15:42", quote: "预测市盈率 19.8 倍，位于近三年 57% 分位。", status: "available", metricKey: "valuation", relates: "预测市盈率、历史分位" },
+          { id: "product-update", level: "二级来源", type: "external", title: "海外游戏产品更新汇总（模拟）", publisher: "行业数据库", time: "昨天 21:10", quote: "两款重点产品在多个市场进入畅销榜前列。", url: "https://example.com/tencent-games", status: "available", relates: "产品表现、收入持续性" },
+          { id: "channel-check", level: "信息线索", type: "external", title: "渠道投放强度跟踪（模拟）", publisher: "第三方监测", time: "今天 11:30", quote: "部分市场买量素材数量上升，但无法直接映射利润率。", status: "unavailable", relates: "销售费用、增长质量" }
+        ],
+        reasoning: {
+          primary: {
+            conclusion: { title: "海外增长得到确认，增长质量仍待验证", summary: "收入证据增强了原判断，但利润率与费用率暂未同步改善。", confidence: 72, state: "值得留意" },
+            nodes: [
+              { kind: "事实", title: "海外游戏收入同比增长 23%", detail: "来自公司季度公告，为本次判断中权重最高的直接事实。", citations: [{ type: "metric", target: "revenue", label: "海外游戏收入 +23%" }, { type: "source", target: "earnings-release", label: "季度公告" }] },
+              { kind: "事实", title: "整体毛利率环比下降 0.8 个百分点", detail: "增长尚未同步体现为利润率改善。", citations: [{ type: "metric", target: "margin", label: "毛利率 52.1%" }, { type: "source", target: "earnings-release", label: "季度公告" }] },
+              { kind: "信号", title: "增长动能较强，但边际成本上升", detail: "收入增速上行与费用率抬升同时发生，信号方向并不完全一致。", citations: [{ type: "metric", target: "expense", label: "销售费用率 8.7%" }] },
+              { kind: "推断", title: "海外业务可以部分抵消国内放缓", detail: "该推断受收入数据支持；是否改善长期增长质量仍取决于盈利兑现。", citations: [{ type: "source", target: "earnings-call", label: "管理层说明" }] },
+              { kind: "结论", title: "保留原判断，但提高利润率观察权重", detail: "当前证据不足以否定原判断，也不足以将其升级为已验证。", citations: [{ type: "metric", target: "margin", label: "查看利润率" }, { type: "metric", target: "valuation", label: "查看估值" }] },
+              { kind: "尚不确定", title: "利润率下降的主因无法拆分", detail: "内容投入、渠道成本与业务结构变化都可能贡献，现有资料无法给出可靠权重。", citations: [{ type: "source", target: "channel-check", label: "不可用渠道线索" }] },
+              { kind: "待验证", title: "下一季度盈利表现与费用率", detail: "若海外收入保持双位数增长且毛利率回升，结论可信度将明显提高；反之将下调。", citations: [{ type: "metric", target: "expense", label: "销售费用率" }] }
+            ]
+          },
+          volatility: {
+            conclusion: { title: "单日回调更接近市场波动，暂未识别基本面拐点", summary: "量能放大值得观察，但尚无一级来源支持负面归因。", confidence: 61, state: "信息不足" },
+            nodes: [
+              { kind: "事实", title: "收盘下跌 1.8%，成交量高于均值 31%", detail: "价格与量能同步变化。", citations: [{ type: "metric", target: "change", label: "当日涨跌" }, { type: "metric", target: "volume", label: "成交量" }] },
+              { kind: "信号", title: "交易活跃度上升", detail: "量能异常提高了继续跟踪的价值，但不能单独证明方向。", citations: [{ type: "source", target: "market-close", label: "收市行情" }] },
+              { kind: "结论", title: "不对单日价格变化进行基本面归因", detail: "等待公司披露或连续数据出现。", citations: [{ type: "metric", target: "price", label: "价格走势" }] }
+            ]
+          },
+          valuation: {
+            conclusion: { title: "估值处于历史中段，不构成独立结论", summary: "估值需要与盈利兑现速度共同判断。", confidence: 66, state: "保持观察" },
+            nodes: [
+              { kind: "事实", title: "预测市盈率为 19.8 倍", detail: "位于近三年区间中部。", citations: [{ type: "metric", target: "valuation", label: "估值详情" }] },
+              { kind: "推断", title: "市场已计入部分增长预期", detail: "若利润率不改善，估值扩张空间有限。", citations: [{ type: "metric", target: "margin", label: "毛利率" }] },
+              { kind: "结论", title: "估值本身不触发判断变更", detail: "继续以盈利质量作为主要验证变量。", citations: [{ type: "source", target: "valuation-model", label: "估值模型" }] }
+            ]
+          }
+        },
+        pushes: [
+          { id: "tc-p1", type: "earnings", time: "16:26", priority: "重要", title: "海外游戏收入增速高于上季", summary: "最新季度同比增长 23%，但利润率尚未同步改善。", reason: "触及你在研究档案中设置的“海外游戏收入增速”观察项。", metricKey: "revenue", traceId: "primary", prompts: ["为什么重要？", "查看完整推断链"] },
+          { id: "tc-p2", type: "market", time: "16:05", priority: "观察", title: "收盘回调且成交量放大", summary: "股价下跌 1.8%，成交量较 20 日均值增加 31%。", reason: "价格和量能同时超过日常波动阈值。", metricKey: "volume", traceId: "volatility", prompts: ["这是基本面变化吗？", "查看量价数据"] },
+          { id: "tc-p3", type: "valuation", time: "15:43", priority: "更新", title: "估值回到近三年中位区间", summary: "预测市盈率约 19.8 倍，处于近三年 57% 分位。", reason: "估值指标跨越你设置的 55% 分位观察线。", metricKey: "valuation", traceId: "valuation", prompts: ["估值意味着什么？", "查看估值依据"] },
+          { id: "tc-p4", type: "management", time: "14:58", priority: "重要", title: "管理层强调继续投入海外发行", summary: "投入方向延续，短期费用率可能仍有波动。", reason: "可能影响你对增长质量和利润率改善节奏的判断。", metricKey: "expense", traceId: "primary", prompts: ["这会影响原判断吗？", "查看管理层原文"] },
+          { id: "tc-p5", type: "industry", time: "13:20", priority: "观察", title: "全球移动游戏市场收入温和回升", summary: "行业数据指向需求改善，但公司层面受益程度仍未确认。", reason: "行业趋势与你关注的海外增长方向相关。", metricKey: "revenue", traceId: "primary", prompts: ["行业改善能说明什么？", "还有哪些未知项？"] },
+          { id: "tc-p6", type: "uncertain", time: "11:34", priority: "线索", title: "渠道投放强度上升，原因尚不明确", summary: "第三方监测到部分市场素材数量增加，无法直接映射收入或利润。", reason: "系统保留低可信线索，但不会把它当作已确认事实。", metricKey: "expense", traceId: "primary", prompts: ["为什么不能确认？", "查看线索来源"] },
+          { id: "tc-p7", type: "product", time: "昨天 21:12", priority: "更新", title: "两款长青产品进入多个市场畅销榜", summary: "产品排名改善为收入延续性提供辅助证据。", reason: "与海外收入持续性的待验证条件相关。", metricKey: "revenue", traceId: "primary", prompts: ["产品排名可靠吗？", "查看收入趋势"] },
+          { id: "tc-p8", type: "risk", time: "昨天 18:10", priority: "风险", title: "汇率波动可能影响海外收入换算", summary: "港币与主要海外货币波动扩大，报表口径可能受到影响。", reason: "这是收入增速解释中的潜在混杂因素。", metricKey: "revenue", traceId: "primary", prompts: ["影响有多大？", "需要核验什么？"] }
+        ]
+      },
+      "600519": {
+        metrics: {
+          price: { label: "最新价", value: "¥ 1,488.20", delta: "当日 +0.6%", tone: "up", sourceId: "market-close" },
+          change: { label: "当日涨跌", value: "+0.6%", delta: "近 20 日波动率 18.2%", tone: "up", sourceId: "market-close" },
+          volume: { label: "成交量", value: "328 万股", delta: "较 20 日均值 +18%", tone: "up", sourceId: "market-close" },
+          turnover: { label: "成交额", value: "¥ 48.9 亿", delta: "市场活跃度温和上升", tone: "up", sourceId: "market-close" },
+          valuation: { label: "预测市盈率", value: "21.6×", delta: "近 5 年分位 34%", tone: "", sourceId: "valuation-model" },
+          wholesale: { label: "核心产品批价", value: "¥ 2,310", delta: "近 7 日 −1.3%", tone: "down", sourceId: "channel-price" },
+          inventory: { label: "渠道库存", value: "2.4 个月", delta: "环比 +0.2 个月", tone: "down", sourceId: "channel-check" },
+          direct: { label: "直营收入占比", value: "45.2%", delta: "同比 +2.8pct", tone: "up", sourceId: "operations-update" }
+        },
+        events: [
+          { index: 12, title: "月度批价回落", tone: "market", sourceId: "channel-price" },
+          { index: 29, title: "股东大会交流", tone: "important", sourceId: "shareholder-meeting" },
+          { index: 48, title: "直营经营数据更新", tone: "info", sourceId: "operations-update" },
+          { index: 69, title: "消费板块普遍上涨", tone: "market", sourceId: "market-close" },
+          { index: 93, title: "成交额高于均值", tone: "market", sourceId: "market-close" }
+        ],
+        sources: [
+          { id: "market-close", level: "结构化数据", type: "internal", title: "A 股收市行情数据（模拟）", publisher: "站内行情库", time: "今天 15:05", quote: "贵州茅台收报 1,488.20 元，成交额较近 20 日均值增加 18%。", status: "available", metricKey: "price", relates: "价格、涨跌幅、成交量、成交额" },
+          { id: "channel-price", level: "结构化数据", type: "internal", title: "核心产品批价跟踪（模拟）", publisher: "站内渠道数据库", time: "今天 14:20", quote: "核心产品批价约 2,310 元，近七日下降 1.3%。", status: "available", metricKey: "wholesale", relates: "批价、短期动销" },
+          { id: "channel-check", level: "信息线索", type: "external", title: "经销商库存调研汇总（模拟）", publisher: "渠道调研", time: "今天 13:40", quote: "样本渠道库存约 2.4 个月，但区域差异较大。", url: "https://example.com/moutai-channel", status: "available", relates: "渠道库存、动销" },
+          { id: "operations-update", level: "一级来源", type: "external", title: "经营数据公告（模拟）", publisher: "公司公告", time: "上周五 18:12", quote: "直营渠道收入占比同比提升 2.8 个百分点。", url: "https://www.moutaichina.com/", status: "available", relates: "直营收入占比、渠道结构" },
+          { id: "shareholder-meeting", level: "一级来源", type: "external", title: "股东大会交流记录（模拟）", publisher: "公司管理层", time: "8 月 28 日", quote: "公司将继续关注渠道秩序与长期品牌建设。", url: "https://www.moutaichina.com/", status: "available", relates: "渠道策略、品牌投入" },
+          { id: "valuation-model", level: "结构化数据", type: "internal", title: "一致预期估值快照（模拟）", publisher: "站内估值模型", time: "今天 15:10", quote: "预测市盈率 21.6 倍，处于近五年 34% 分位。", status: "available", metricKey: "valuation", relates: "估值、历史分位" },
+          { id: "policy-rumor", level: "未经确认", type: "external", title: "行业政策讨论汇总（模拟）", publisher: "公开讨论", time: "今天 12:06", quote: "市场存在政策调整猜测，目前没有正式文件。", status: "unavailable", relates: "市场情绪、政策预期" }
+        ],
+        reasoning: {
+          primary: {
+            conclusion: { title: "量价变化不足以确认基本面拐点", summary: "成交放大与价格上涨是事实，但直接原因与持续性仍不明确。", confidence: 54, state: "信息不足" },
+            nodes: [
+              { kind: "事实", title: "股价上涨 0.6%，成交量高于均值 18%", detail: "行情出现温和异动，但幅度尚未跨越中期波动区间。", citations: [{ type: "metric", target: "change", label: "当日涨跌" }, { type: "metric", target: "volume", label: "成交量" }] },
+              { kind: "事实", title: "同期没有新的公司公告", detail: "缺少能够直接解释异动的一级来源。", citations: [{ type: "source", target: "market-close", label: "收市行情" }] },
+              { kind: "信号", title: "市场关注度上升", detail: "量能提升说明交易活跃，但不说明买方依据是否与基本面相关。", citations: [{ type: "metric", target: "turnover", label: "成交额" }] },
+              { kind: "推断", title: "渠道与政策讨论可能影响情绪", detail: "这是可能解释，不是已确认因果。", citations: [{ type: "source", target: "channel-check", label: "渠道调研" }, { type: "source", target: "policy-rumor", label: "未确认讨论" }] },
+              { kind: "结论", title: "暂不改变长期判断", detail: "单日行情不能证明品牌力、渠道秩序或需求趋势发生变化。", citations: [{ type: "metric", target: "wholesale", label: "批价" }, { type: "metric", target: "inventory", label: "渠道库存" }] },
+              { kind: "尚不确定", title: "异动的直接驱动因素", detail: "目前不能在资金轮动、渠道预期与政策讨论之间分配可靠权重。", citations: [{ type: "source", target: "policy-rumor", label: "不可用来源" }] },
+              { kind: "待验证", title: "批价与库存能否连续改善", detail: "若批价企稳且库存下降，长期判断将获得更强支持。", citations: [{ type: "metric", target: "wholesale", label: "批价趋势" }, { type: "metric", target: "inventory", label: "库存趋势" }] }
+            ]
+          },
+          channel: {
+            conclusion: { title: "渠道压力温和上升，尚未跨过失效阈值", summary: "批价回落与库存上升方向偏弱，但持续时间仍短。", confidence: 63, state: "值得留意" },
+            nodes: [
+              { kind: "事实", title: "核心产品批价近七日下降 1.3%", detail: "短期价格信号转弱。", citations: [{ type: "metric", target: "wholesale", label: "批价" }] },
+              { kind: "事实", title: "样本库存环比上升 0.2 个月", detail: "样本覆盖有限，区域差异较大。", citations: [{ type: "metric", target: "inventory", label: "渠道库存" }, { type: "source", target: "channel-check", label: "渠道调研" }] },
+              { kind: "结论", title: "提高渠道指标观察频率", detail: "连续性比单点水平更重要。", citations: [{ type: "source", target: "shareholder-meeting", label: "管理层交流" }] }
+            ]
+          },
+          valuation: {
+            conclusion: { title: "估值位于历史偏低区间，但不是买卖依据", summary: "较低分位提供缓冲，仍需需求和渠道数据验证。", confidence: 68, state: "保持观察" },
+            nodes: [
+              { kind: "事实", title: "预测市盈率位于近五年 34% 分位", detail: "估值低于历史中位数。", citations: [{ type: "metric", target: "valuation", label: "估值详情" }] },
+              { kind: "推断", title: "市场对增长预期相对谨慎", detail: "低估值可能来自增长预期下降，而非单纯错误定价。", citations: [{ type: "metric", target: "wholesale", label: "批价" }] },
+              { kind: "结论", title: "估值不能替代基本面验证", detail: "继续优先观察批价、库存和直营占比。", citations: [{ type: "metric", target: "direct", label: "直营占比" }] }
+            ]
+          }
+        },
+        pushes: [
+          { id: "mt-p1", type: "market", time: "15:08", priority: "观察", title: "成交量温和放大，未发现直接公告", summary: "收盘上涨 0.6%，成交量较 20 日均值高 18%。", reason: "量价同时变化，但缺少一级来源解释。", metricKey: "volume", traceId: "primary", prompts: ["为什么不能确认原因？", "查看量价数据"] },
+          { id: "mt-p2", type: "channel", time: "14:24", priority: "重要", title: "核心产品批价连续七日回落", summary: "模拟批价降至 2,310 元，七日累计下降 1.3%。", reason: "触及你研究档案中的“批价”观察项。", metricKey: "wholesale", traceId: "channel", prompts: ["会影响原判断吗？", "查看渠道推断链"] },
+          { id: "mt-p3", type: "inventory", time: "13:44", priority: "观察", title: "样本渠道库存小幅上升", summary: "样本库存约 2.4 个月，环比增加 0.2 个月。", reason: "库存与批价同向转弱，需要检查持续性。", metricKey: "inventory", traceId: "channel", prompts: ["样本可靠吗？", "查看库存来源"] },
+          { id: "mt-p4", type: "valuation", time: "12:50", priority: "更新", title: "估值处于近五年较低分位", summary: "预测市盈率约 21.6 倍，位于近五年 34% 分位。", reason: "估值进入你设置的 35% 分位观察区间。", metricKey: "valuation", traceId: "valuation", prompts: ["估值偏低说明什么？", "查看估值数据"] },
+          { id: "mt-p5", type: "uncertain", time: "12:08", priority: "线索", title: "政策讨论升温，但没有正式文件", summary: "公开讨论可能影响情绪，当前不能作为事实使用。", reason: "系统保留可能影响价格的低可信线索。", metricKey: "change", traceId: "primary", prompts: ["为什么还要展示？", "查看来源边界"] },
+          { id: "mt-p6", type: "operations", time: "上周五", priority: "重要", title: "直营收入占比继续提升", summary: "直营收入占比同比提高 2.8 个百分点。", reason: "直接关联你对渠道调整有效性的判断。", metricKey: "direct", traceId: "channel", prompts: ["渠道结构改善了吗？", "查看经营公告"] },
+          { id: "mt-p7", type: "management", time: "8 月 28 日", priority: "更新", title: "管理层继续强调渠道秩序", summary: "交流内容延续长期品牌与渠道治理方向。", reason: "与研究档案中的核心假设相关。", metricKey: "inventory", traceId: "channel", prompts: ["这算新证据吗？", "查看交流记录"] },
+          { id: "mt-p8", type: "industry", time: "8 月 26 日", priority: "观察", title: "高端消费需求数据分化", summary: "不同地区与场景表现差异扩大，单一行业指标解释力下降。", reason: "可能影响长期需求判断，但证据方向不一致。", metricKey: "wholesale", traceId: "primary", prompts: ["哪些数据冲突？", "后续观察什么？"] }
+        ]
+      }
+    };
+
+    Object.entries(researchData).forEach(([assetId, data], index) => {
+      Object.assign(assets[assetId], data, {
+        marketSeries: buildMarketSeries(index ? 17 : 7, index ? 1488.2 : 625.5)
+      });
+    });
+
+    const state = {
+      assetId: "TCEHY",
+      messages: { TCEHY: [], "600519": [] },
+      visiblePushes: { TCEHY: ["tc-p2", "tc-p3", "tc-p4"], "600519": ["mt-p2", "mt-p3", "mt-p4"] },
+      readPushes: { TCEHY: [], "600519": [] },
+      pushCursor: { TCEHY: 4, "600519": 4 },
+      popoverOpen: false,
+      sheetView: null,
+      sheetHistory: [],
+      archiveTab: "thesis",
+      chartPeriod: "day",
+      generating: false,
+      generationTimer: null,
+      generationToken: 0
+    };
+
+    const conversation = document.querySelector("#conversation");
+    const conversationScroll = document.querySelector(".conversation-scroll");
+    const assetSwitcher = document.querySelector("#asset-switcher");
+    const assetSwitcherLabel = document.querySelector("#asset-switcher-label");
+    const assetPopover = document.querySelector("#asset-popover");
+    const composer = document.querySelector("#composer");
+    const promptInput = composer.elements.prompt;
+    const sendButton = composer.querySelector(".send-button");
+    const sheet = document.querySelector("#detail-sheet");
+    const toast = document.querySelector("#toast");
+    const appShell = document.querySelector(".app-shell");
+    const tourLayer = document.querySelector("#tour-layer");
+    const tourPopover = document.querySelector("#tour-popover");
+    const tourFocusRing = document.querySelector("#tour-focus-ring");
+    const tourBlocker = document.querySelector("#tour-blocker");
+    const tourMasks = {
+      top: document.querySelector(".tour-mask-top"),
+      left: document.querySelector(".tour-mask-left"),
+      right: document.querySelector(".tour-mask-right"),
+      bottom: document.querySelector(".tour-mask-bottom")
+    };
+    let lastTrigger = null;
+    let toastTimer = null;
+    let tourIndex = 0;
+    let tourActive = false;
+    let tourReturnFocus = null;
+    let tourCloseTimer = null;
+    const tourStorageKey = "ai-invest-tour-complete-v1";
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, character => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+      })[character]);
+    }
+
+    function iconCheck() {
+      return '<svg class="checkmark" width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4.5 10.5 3.2 3.2 7.8-7.8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    }
+
+    function metricButton(asset, metricKey, text = null, className = "data-link") {
+      const metric = asset.metrics[metricKey];
+      if (!metric) return escapeHtml(text || "—");
+      return `<button class="${className} pressable" type="button" data-metric="${metricKey}" aria-label="查看${metric.label}的数据详情">${escapeHtml(text || metric.value)}</button>`;
+    }
+
+    function aggregateSeries(series, period = "day") {
+      const groupSize = period === "week" ? 5 : period === "month" ? 20 : 1;
+      const grouped = [];
+      for (let index = 0; index < series.length; index += groupSize) {
+        const group = series.slice(index, index + groupSize);
+        if (!group.length) continue;
+        grouped.push({
+          date: group.at(-1).date,
+          open: group[0].open,
+          high: Math.max(...group.map(point => point.high)),
+          low: Math.min(...group.map(point => point.low)),
+          close: group.at(-1).close,
+          volume: group.reduce((sum, point) => sum + point.volume, 0)
+        });
+      }
+      const limits = { day: 38, week: 20, month: 12 };
+      return grouped.slice(-limits[period]);
+    }
+
+    function formatCompactVolume(value) {
+      if (value >= 100000000) return `${(value / 100000000).toFixed(1)}亿`;
+      if (value >= 10000) return `${(value / 10000).toFixed(0)}万`;
+      return String(value);
+    }
+
+    function renderCandlestickChart(asset, period = "day") {
+      const data = aggregateSeries(asset.marketSeries, period);
+      if (data.length < 2) return '<div class="detail-section"><p>当前周期的数据点不足，指标摘要仍可查看。</p></div>';
+      const width = 500;
+      const height = 300;
+      const plotLeft = 10;
+      const plotRight = 450;
+      const priceTop = 16;
+      const priceBottom = 202;
+      const volumeTop = 224;
+      const volumeBottom = 276;
+      const minPrice = Math.min(...data.map(point => point.low));
+      const maxPrice = Math.max(...data.map(point => point.high));
+      const maxVolume = Math.max(...data.map(point => point.volume));
+      const priceRange = Math.max(.01, maxPrice - minPrice);
+      const xStep = (plotRight - plotLeft) / data.length;
+      const candleWidth = Math.max(3, Math.min(9, xStep * .58));
+      const xAt = index => plotLeft + xStep * index + xStep / 2;
+      const yAt = value => priceBottom - ((value - minPrice) / priceRange) * (priceBottom - priceTop);
+      const grid = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const y = priceTop + ratio * (priceBottom - priceTop);
+        const price = maxPrice - ratio * priceRange;
+        return `<line class="chart-grid-line" x1="${plotLeft}" y1="${y}" x2="${plotRight}" y2="${y}"/><text class="chart-axis-label" x="458" y="${y + 3}">${price.toFixed(1)}</text>`;
+      }).join("");
+      const candles = data.map((point, index) => {
+        const x = xAt(index);
+        const openY = yAt(point.open);
+        const closeY = yAt(point.close);
+        const highY = yAt(point.high);
+        const lowY = yAt(point.low);
+        const up = point.close >= point.open;
+        const className = up ? "chart-candle-up" : "chart-candle-down";
+        const bodyY = Math.min(openY, closeY);
+        const bodyHeight = Math.max(1.5, Math.abs(closeY - openY));
+        const volumeHeight = point.volume / maxVolume * (volumeBottom - volumeTop);
+        return `<g><title>${point.date} 开 ${point.open.toFixed(2)} 高 ${point.high.toFixed(2)} 低 ${point.low.toFixed(2)} 收 ${point.close.toFixed(2)} 量 ${formatCompactVolume(point.volume)}</title><line class="${className}" x1="${x}" y1="${highY}" x2="${x}" y2="${lowY}"/><rect class="${className}" x="${x - candleWidth / 2}" y="${bodyY}" width="${candleWidth}" height="${bodyHeight}" rx=".7"/><rect class="chart-volume" x="${x - candleWidth / 2}" y="${volumeBottom - volumeHeight}" width="${candleWidth}" height="${volumeHeight}" rx="1"/></g>`;
+      }).join("");
+      const movingAverage = data.map((point, index) => {
+        const window = data.slice(Math.max(0, index - 4), index + 1);
+        return { x: xAt(index), y: yAt(window.reduce((sum, item) => sum + item.close, 0) / window.length) };
+      });
+      const maPath = movingAverage.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+      const eventMarks = asset.events.map((event, index) => {
+        const x = plotLeft + ((event.index % asset.marketSeries.length) / (asset.marketSeries.length - 1)) * (plotRight - plotLeft);
+        const y = 24 + (index % 2) * 12;
+        return `<g><title>${event.title}</title><line class="chart-event-line" x1="${x}" y1="${y + 7}" x2="${x}" y2="${priceBottom}"/><circle class="chart-event-dot" cx="${x}" cy="${y}" r="4"/></g>`;
+      }).join("");
+      const firstDate = data[0].date.slice(5);
+      const lastDate = data.at(-1).date.slice(5);
+      return `
+        <svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${asset.name}${period === "day" ? "日" : period === "week" ? "周" : "月"}K线、成交量、五期均线与事件标记">
+          ${grid}
+          <line class="chart-grid-line" x1="${plotLeft}" y1="${volumeTop}" x2="${plotRight}" y2="${volumeTop}"/>
+          ${candles}
+          <path class="chart-ma" d="${maPath}"/>
+          ${eventMarks}
+          <text class="chart-axis-label" x="${plotLeft}" y="294">${firstDate}</text>
+          <text class="chart-axis-label" x="${plotRight}" y="294" text-anchor="end">${lastDate}</text>
+        </svg>
+        <div class="chart-legend"><span class="legend-item"><i class="legend-swatch"></i>五期均线</span><span class="legend-item"><i class="legend-swatch volume"></i>成交量</span><span class="legend-item"><i class="legend-swatch event"></i>关键事件</span></div>
+      `;
+    }
+
+    function renderAssetPopover() {
+      assetPopover.innerHTML = Object.values(assets).map(asset => `
+        <button class="asset-option pressable" type="button" role="option" data-asset="${asset.id}" aria-checked="${asset.id === state.assetId}">
+          <span class="asset-avatar ${asset.avatarClass}">${asset.short}</span>
+          <span><span class="asset-name">${asset.name}</span><span class="asset-kind">${asset.kind} · ${asset.code}</span></span>
+          ${iconCheck()}
+        </button>
+      `).join("") + `
+        <div class="popover-divider"></div>
+        <button class="manage-assets pressable" type="button" data-sheet="assets">管理标的</button>
+      `;
+    }
+
+    function initialMessage(asset) {
+      const analysisId = `initial-${asset.id}`;
+      return `
+        <div class="context-line">
+          <strong>${asset.name}</strong><span>${metricButton(asset, "price")}</span><span class="context-dot">·</span><span>${metricButton(asset, "change")}</span><span class="context-dot">·</span><span>更新于 ${asset.updated}</span>
+        </div>
+        <div class="feed-toolbar" aria-label="AI 动态状态">
+          <span class="feed-status"><i class="feed-pulse" aria-hidden="true"></i>AI 正在持续检查 ${asset.metrics ? Object.keys(asset.metrics).length : 0} 个关键指标</span>
+          <button class="simulate-button pressable" type="button" data-simulate-push>模拟新动态</button>
+        </div>
+        <article class="message assistant">
+          <div data-tour="dynamic">
+            <div class="assistant-kicker"><span class="status-dot ${asset.statusClass}"></span>今日最重要的变化 · 模拟数据</div>
+            <h1>${asset.headline}</h1>
+            <p class="lede">${asset.lede}</p>
+            <div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${asset.statusClass}">${asset.status}</span><span>相对于研究档案中的判断</span></div><button class="detail-link pressable" type="button" data-trace="primary">详情</button></div>
+          </div>
+          <div class="message-actions" data-tour="actions">
+            ${asset.prompts.map(prompt => `<button class="prompt-chip pressable" type="button" data-prompt="${prompt}">${prompt}</button>`).join("")}
+            <button class="text-button pressable" type="button" data-analysis-toggle="${analysisId}" aria-expanded="false">展开分析</button>
+          </div>
+          <div class="analysis" data-analysis="${analysisId}" hidden>
+            ${analysisMarkup(asset.analysis, asset)}
+          </div>
+          <div class="source-line"><span>${asset.sources.length} 个来源</span><span>·</span><button type="button" data-archive-tab="sources">查看来源记录</button></div>
+        </article>
+      `;
+    }
+
+    function linkifyAnalysis(asset, value) {
+      let html = escapeHtml(value);
+      const replacements = [
+        ["23%", "revenue"], ["0.8 个百分点", "margin"], ["1.8%", "change"], ["31%", "volume"],
+        ["0.6%", "change"], ["18%", "volume"], ["2,310", "wholesale"], ["2.4 个月", "inventory"]
+      ];
+      replacements.forEach(([needle, key]) => {
+        if (!asset.metrics[key] || !html.includes(needle)) return;
+        html = html.replace(needle, metricButton(asset, key, needle));
+      });
+      return html;
+    }
+
+    function analysisMarkup(analysis, asset = assets[state.assetId]) {
+      return `
+        <div class="analysis-row"><div class="analysis-label">已知事实</div><div class="analysis-value">${linkifyAnalysis(asset, analysis.facts)}</div></div>
+        <div class="analysis-row"><div class="analysis-label">当前推断</div><div class="analysis-value">${escapeHtml(analysis.inference)}</div></div>
+        <div class="analysis-row"><div class="analysis-label">尚不确定</div><div class="analysis-value">${escapeHtml(analysis.unknown)}</div></div>
+        <div class="analysis-row"><div class="analysis-label">下一步可核验</div><div class="analysis-value">${escapeHtml(analysis.next)}</div></div>
+      `;
+    }
+
+    function renderPushMessage(asset, push) {
+      const unread = !state.readPushes[asset.id].includes(push.id);
+      return `
+        <article class="push-message" data-push-id="${push.id}">
+          <div class="push-meta">${unread ? '<i class="unread-dot" aria-label="未读"></i>' : ""}<span>AI 推送</span><span>·</span><span>${push.time}</span><span class="push-priority">${push.priority}</span></div>
+          <h2>${push.title}</h2>
+          <p class="push-summary">${push.summary}</p>
+          <p class="push-reason"><strong>为什么推送：</strong>${push.reason}</p>
+          <div class="message-actions">
+            ${push.prompts.map(prompt => `<button class="prompt-chip pressable" type="button" data-prompt="${prompt}">${prompt}</button>`).join("")}
+            <button class="text-button pressable" type="button" data-metric="${push.metricKey}">查看数据</button>
+            <button class="text-button pressable" type="button" data-trace="${push.traceId}">查看推断</button>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderConversation() {
+      const asset = assets[state.assetId];
+      assetSwitcherLabel.textContent = `${asset.name} · ${asset.kind}`;
+      renderAssetPopover();
+      const pushMessages = state.visiblePushes[state.assetId]
+        .map(id => asset.pushes.find(push => push.id === id))
+        .filter(Boolean)
+        .map(push => renderPushMessage(asset, push)).join("");
+      conversation.innerHTML = initialMessage(asset) + pushMessages + state.messages[state.assetId].map(message => {
+        if (message.role === "user") {
+          return `<article class="message user"><div class="user-message">${escapeHtml(message.text)}</div></article>`;
+        }
+        if (message.stage === "understanding" || message.stage === "retrieving") {
+          const stageLabel = message.stage === "understanding" ? "正在理解问题" : "正在检索研究档案";
+          return `<article class="message assistant" data-answer-id="${message.id}"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在回答</div><div class="thinking-state"><span>${stageLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`;
+        }
+        const detailAction = message.traceId ? `<button class="detail-link pressable" type="button" data-trace="${message.traceId}">详情</button>` : "";
+        return `<article class="message assistant" data-answer-id="${message.id}"><div class="assistant-kicker"><span class="status-dot ${message.statusClass || "support"}"></span>${message.stage === "stopped" ? "生成已停止" : "基于研究档案 · 模拟回答"}</div><div class="answer-copy ${message.streaming ? "stream-cursor" : ""}">${message.html || ""}</div>${message.stage === "stopped" ? '<div class="stopped-note">已保留生成内容，可重新提问继续。</div>' : ""}<div class="message-actions">${detailAction}${message.analysis && !message.streaming ? `<button class="text-button pressable" type="button" data-analysis-toggle="${message.id}" aria-expanded="false">展开分析</button>` : ""}</div>${message.analysis && !message.streaming ? `<div class="analysis" data-analysis="${message.id}" hidden>${analysisMarkup(message.analysis, asset)}</div>` : ""}</article>`;
+      }).join("");
+    }
+
+    function selectAsset(assetId) {
+      if (!assets[assetId] || assetId === state.assetId) {
+        closeAssetPopover();
+        return;
+      }
+      if (state.generating) stopStreamingAnswer();
+      state.assetId = assetId;
+      closeAssetPopover();
+      renderConversation();
+      conversationScroll.scrollTo({ top: 0, behavior: "smooth" });
+      promptInput.placeholder = `继续问关于${assets[assetId].name}的问题…`;
+    }
+
+    function toggleAnalysis(messageId) {
+      const analysis = document.querySelector(`[data-analysis="${messageId}"]`);
+      const trigger = document.querySelector(`[data-analysis-toggle="${messageId}"]`);
+      if (!analysis || !trigger) return;
+      const willOpen = analysis.hidden;
+      analysis.hidden = !willOpen;
+      trigger.setAttribute("aria-expanded", String(willOpen));
+      trigger.textContent = willOpen ? "收起分析" : "展开分析";
+    }
+
+    function resolveAnswer(prompt) {
+      const asset = assets[state.assetId];
+      const text = prompt.toLowerCase();
+      const id = `answer-${state.assetId}-${Date.now()}`;
+      if (/[买卖加减]仓|买入|卖出|应该买|应该卖/.test(text)) {
+        return {
+          id,
+          statusClass: "uncertain",
+          segments: [`<p><strong>我不能替你决定是否买入或卖出。</strong></p>`, `<p>当前信息被标记为“${asset.status}”，这不等于研究档案中的判断已经成立或失效。</p>`, `<p>更稳妥的下一步是核验 ${metricButton(asset, Object.keys(asset.metrics)[5] || "price")} 与判断失效条件，再由你决定。</p>`],
+          analysis: asset.analysis,
+          traceId: "primary"
+        };
+      }
+      if (/证据|来源|相关信息|原文/.test(text)) {
+        return { id, segments: [`<p>研究档案中当前有 <strong>${asset.sources.length} 个来源</strong>，包括一级来源、站内结构化数据和低可信线索。</p>`, `<p>一级来源优先支持事实；不可用或未经确认的材料只保留为线索，不进入确定结论。</p>`, `<p><button class="text-button pressable" type="button" data-archive-tab="sources">打开来源记录</button></p>`], traceId: "primary" };
+      }
+      if (/估值|市盈率|分位/.test(text)) {
+        return { id, segments: [`<p>${asset.reasoning.valuation.conclusion.title}。</p>`, `<p>${asset.reasoning.valuation.conclusion.summary}</p>`, `<p>当前模拟指标为 ${metricButton(asset, "valuation")}；它只是一项条件，不能单独推出交易结论。</p>`], analysis: asset.analysis, traceId: "valuation" };
+      }
+      if (/成交|量价|股价|价格|波动|基本面变化/.test(text)) {
+        const traceId = asset.reasoning.volatility ? "volatility" : "primary";
+        return { id, segments: [`<p>${asset.reasoning[traceId].conclusion.title}。</p>`, `<p>当前 ${metricButton(asset, "change")}，${metricButton(asset, "volume")}。量能提高了跟踪价值，但没有证明基本面已经变化。</p>`, `<p>需要等待连续行情、公司披露或经营指标共同确认。</p>`], analysis: asset.analysis, traceId };
+      }
+      if (/渠道|库存|批价/.test(text) && asset.reasoning.channel) {
+        return { id, segments: [`<p>${asset.reasoning.channel.conclusion.title}。</p>`, `<p>当前批价 ${metricButton(asset, "wholesale")}；样本库存 ${metricButton(asset, "inventory")}，两项信号方向偏弱。</p>`, `<p>但样本覆盖与持续时间不足，当前只提高观察频率，不直接修改长期判断。</p>`], analysis: asset.analysis, traceId: "channel" };
+      }
+      if (/判断|逻辑|影响/.test(text)) {
+        return {
+          id,
+          segments: [`<p><strong>${asset.status}。</strong>${asset.analysis.inference}</p>`, `<p>AI 不会自动改写你的判断。你可以在研究档案中对照新证据、失效条件和仍不确定的信息。</p>`, `<p><button class="text-button pressable" type="button" data-sheet="impact">对照原判断</button></p>`],
+          analysis: asset.analysis,
+          traceId: "primary"
+        };
+      }
+      if (/为什么|重要/.test(text)) {
+        return { id, segments: [`<p>${asset.analysis.inference}</p>`, `<p>重要性来自它与研究档案中关键变量的连接，而不是单日涨跌本身。</p>`, `<p>如果相关数据连续变化并接近判断失效条件，系统才会提高结论等级。</p>`], analysis: asset.analysis, traceId: "primary" };
+      }
+      if (/观察|后续|接下来|核验|未知/.test(text)) {
+        return { id, segments: [`<p><strong>接下来重点看：</strong>${asset.analysis.next}</p>`, `<p>判断更新的门槛是多项证据连续同向，而不是一次异常。</p>`, `<p>研究档案会保留当前结论、未知项和后续验证条件，便于下次对照。</p>`], analysis: asset.analysis, traceId: "primary" };
+      }
+      return {
+        id,
+        segments: [`<p>基于当前 <strong>${asset.sources.length} 个来源</strong>和 ${Object.keys(asset.metrics).length} 个关键指标，当前结论仍是“${asset.status}”。</p>`, `<p>${asset.analysis.inference}</p>`, `<p>你可以继续追问重要性、证据边界、估值或它是否影响原判断。</p>`],
+        analysis: asset.analysis,
+        traceId: "primary"
+      };
+    }
+
+    function appendUserMessage(text) {
+      state.messages[state.assetId].push({ role: "user", text });
+    }
+
+    function setGeneratingUI(isGenerating) {
+      state.generating = isGenerating;
+      sendButton.classList.toggle("is-generating", isGenerating);
+      sendButton.setAttribute("aria-label", isGenerating ? "停止生成" : "发送");
+      sendButton.innerHTML = isGenerating
+        ? '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    }
+
+    function stopStreamingAnswer() {
+      if (!state.generating) return;
+      clearTimeout(state.generationTimer);
+      state.generationToken += 1;
+      const messages = state.messages[state.assetId];
+      const current = [...messages].reverse().find(message => message.role === "assistant" && message.streaming);
+      if (current) {
+        current.streaming = false;
+        current.stage = "stopped";
+        if (!current.html) current.html = "<p>回答已在生成前停止。</p>";
+      }
+      setGeneratingUI(false);
+      renderConversation();
+    }
+
+    function scrollConversationToEnd(behavior = "smooth") {
+      requestAnimationFrame(() => conversationScroll.scrollTo({ top: conversationScroll.scrollHeight, behavior }));
+    }
+
+    function startStreamingAnswer(answer) {
+      const token = ++state.generationToken;
+      const targetAssetId = state.assetId;
+      const segments = answer.segments || ["<p>暂时没有可用回答。</p>"];
+      const message = { role: "assistant", ...answer, html: "", stage: "understanding", streaming: true };
+      delete message.segments;
+      state.messages[targetAssetId].push(message);
+      setGeneratingUI(true);
+      renderConversation();
+      scrollConversationToEnd();
+      state.generationTimer = setTimeout(() => {
+        if (token !== state.generationToken) return;
+        message.stage = "retrieving";
+        renderConversation();
+        scrollConversationToEnd();
+        state.generationTimer = setTimeout(() => {
+          if (token !== state.generationToken) return;
+          message.stage = "streaming";
+          let index = 0;
+          const appendSegment = () => {
+            if (token !== state.generationToken) return;
+            message.html += segments[index];
+            index += 1;
+            renderConversation();
+            scrollConversationToEnd("auto");
+            if (index < segments.length) {
+              state.generationTimer = setTimeout(appendSegment, 430);
+            } else {
+              message.streaming = false;
+              message.stage = "complete";
+              if (state.assetId === targetAssetId) {
+                setGeneratingUI(false);
+                renderConversation();
+                scrollConversationToEnd();
+              }
+            }
+          };
+          appendSegment();
+        }, 620);
+      }, 480);
+    }
+
+    function ask(prompt) {
+      const cleanPrompt = String(prompt).trim();
+      if (!cleanPrompt) return;
+      if (state.generating) stopStreamingAnswer();
+      appendUserMessage(cleanPrompt);
+      startStreamingAnswer(resolveAnswer(cleanPrompt));
+    }
+
+    function triggerPush(assetId = state.assetId, manual = true) {
+      const asset = assets[assetId];
+      const cursor = state.pushCursor[assetId] % asset.pushes.length;
+      const push = asset.pushes[cursor];
+      state.pushCursor[assetId] = cursor + 1;
+      const visible = state.visiblePushes[assetId];
+      const existingIndex = visible.indexOf(push.id);
+      if (existingIndex >= 0) visible.splice(existingIndex, 1);
+      visible.push(push.id);
+      if (visible.length > 7) visible.shift();
+      if (state.assetId === assetId) {
+        renderConversation();
+        scrollConversationToEnd();
+        showToast(manual ? `已模拟推送：${push.title}` : `收到 AI 动态：${push.title}`);
+      }
+    }
+
+    function openAssetPopover() {
+      state.popoverOpen = true;
+      assetPopover.classList.add("is-open");
+      assetSwitcher.setAttribute("aria-expanded", "true");
+    }
+
+    function closeAssetPopover() {
+      state.popoverOpen = false;
+      assetPopover.classList.remove("is-open");
+      assetSwitcher.setAttribute("aria-expanded", "false");
+    }
+
+    function sheetFrame(title, intro, body, options = {}) {
+      return `
+        <div class="sheet-header chrome">
+          <div class="sheet-heading-group"><h2 class="sheet-title" id="sheet-title" tabindex="-1">${title}</h2>${options.context ? `<span class="sheet-context">${options.context}</span>` : ""}</div>
+          <div class="sheet-header-actions">
+            ${options.back ? '<button class="sheet-back pressable" type="button" data-sheet-back aria-label="返回上一层"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m14.5 5-7 7 7 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' : ""}
+            <button class="icon-button pressable" type="button" data-close-sheet aria-label="关闭">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="sheet-body">
+          ${intro ? `<p class="sheet-intro">${intro}</p>` : ""}
+          ${body}
+        </div>
+      `;
+    }
+
+    function archiveTabsMarkup(active) {
+      const tabs = [["thesis", "判断"], ["data", "数据"], ["reasoning", "推断"], ["sources", "来源"]];
+      return `<div class="archive-tabs" role="tablist" aria-label="研究档案分类">${tabs.map(([id, label]) => `<button class="archive-tab pressable" type="button" role="tab" data-archive-tab="${id}" aria-selected="${active === id}">${label}</button>`).join("")}</div>`;
+    }
+
+    function thesisPanel(asset) {
+      return `
+        <div class="archive-panel" role="tabpanel">
+          <div class="archive-summary"><div><strong>${asset.thesis.core}</strong><p>${asset.thesis.state} · 关注周期 ${asset.thesis.horizon}</p></div><div><span class="confidence-value">${asset.reasoning.primary.conclusion.confidence}%</span><span class="confidence-label">当前置信度</span></div></div>
+          <section class="detail-section"><span class="detail-eyebrow">重点观察</span><p>${asset.thesis.watch}</p></section>
+          <section class="detail-section"><span class="detail-eyebrow">判断失效条件</span><p>${asset.thesis.invalid}</p></section>
+          <section class="detail-section"><span class="detail-eyebrow">最新检查</span><p>${asset.reasoning.primary.conclusion.summary}</p><div class="button-row"><button class="secondary-button pressable" type="button" data-trace="primary">查看推断链</button></div></section>
+          <div class="button-row"><button class="primary-button pressable" type="button" data-edit-thesis>编辑我的判断</button></div>
+        </div>`;
+    }
+
+    function dataPanel(asset) {
+      return `<div class="archive-panel" role="tabpanel"><div class="metric-grid">${Object.entries(asset.metrics).map(([key, metric]) => `
+        <button class="metric-card pressable" type="button" data-metric="${key}">
+          <span class="metric-card-label">${metric.label}</span>
+          <span class="metric-card-value">${metric.value}</span>
+          <span class="metric-card-delta ${metric.tone || ""}">${metric.delta}</span>
+        </button>`).join("")}</div><section class="detail-section"><span class="detail-eyebrow">数据说明</span><p>共展示 ${asset.marketSeries.length} 个交易日与 ${Object.keys(asset.metrics).length} 个关键指标。全部为确定性模拟数据，仅用于交互演示。</p></section></div>`;
+    }
+
+    function citationMarkup(citations) {
+      return `<div class="button-row">${citations.map(citation => `<button class="secondary-button pressable" type="button" ${citation.type === "metric" ? `data-metric="${citation.target}"` : `data-source-id="${citation.target}"`}>${citation.type === "metric" ? "站内数据" : "来源"} · ${citation.label}</button>`).join("")}</div>`;
+    }
+
+    function reasoningPanel(asset, traceId = "primary") {
+      const trace = asset.reasoning[traceId] || asset.reasoning.primary;
+      return `<div class="archive-panel" role="tabpanel">
+        <div class="archive-summary"><div><strong>${trace.conclusion.title}</strong><p>${trace.conclusion.summary}</p></div><div><span class="confidence-value">${trace.conclusion.confidence}%</span><span class="confidence-label">证据置信度</span></div></div>
+        <div class="reasoning-chain">${trace.nodes.map((node, index) => `
+          <section class="reasoning-node">
+            <div class="reasoning-rail"><span class="reasoning-index">${String(index + 1).padStart(2, "0")}</span></div>
+            <div class="reasoning-content"><span class="detail-eyebrow">${node.kind}</span><h3>${node.title}</h3><p>${node.detail}</p>${citationMarkup(node.citations)}</div>
+          </section>`).join("")}</div>
+        <section class="detail-section"><span class="detail-eyebrow">结论变化条件</span><p>${asset.thesis.invalid}</p></section>
+      </div>`;
+    }
+
+    function sourceRecordMarkup(asset) {
+      return `<div class="archive-panel" role="tabpanel">${asset.sources.map(source => `
+        <section class="detail-section">
+          <span class="detail-eyebrow">${source.level} · ${source.type === "internal" ? "站内" : "站外"}</span>
+          <h3>${source.title}</h3>
+          <p class="evidence-quote">“${source.quote}”</p>
+          <div class="evidence-meta"><span>${source.publisher}</span><span>·</span><span>${source.time}</span><span>·</span><span>${source.status === "available" ? "可核验" : "原文暂不可用"}</span></div>
+          <div class="source-record-relates">关联：${source.relates}</div>
+          <div class="button-row"><button class="secondary-button pressable" type="button" data-source-id="${source.id}">查看详情</button></div>
+        </section>`).join("")}</div>`;
+    }
+
+    function researchArchiveSheet(asset, tab = "thesis", traceId = "primary") {
+      state.archiveTab = tab;
+      const panels = {
+        thesis: () => thesisPanel(asset),
+        data: () => dataPanel(asset),
+        reasoning: () => reasoningPanel(asset, traceId),
+        sources: () => sourceRecordMarkup(asset)
+      };
+      return sheetFrame("研究档案", "你的判断、数据、AI 推断和原始来源集中在这里。模拟数据仅用于演示。", archiveTabsMarkup(tab) + (panels[tab] || panels.thesis)(), { context: `${asset.name} · ${asset.code}` });
+    }
+
+    function marketSheet(asset, metricKey = "price", period = "day") {
+      const metric = asset.metrics[metricKey] || asset.metrics.price;
+      state.chartPeriod = period;
+      const periodNames = { day: "日", week: "周", month: "月" };
+      return sheetFrame(
+        `${metric.label} · 数据详情`,
+        "点击任意结构化数值都会进入对应数据视图。K 线、成交量、均线与事件均为模拟数据。",
+        `<div class="archive-panel">
+          <div class="chart-hero"><div class="chart-hero-label">${asset.name} · ${asset.code}</div><div class="chart-hero-value">${metric.value}</div><div class="chart-hero-meta">${metric.delta} · 更新于 ${asset.updated}</div></div>
+          <div class="chart-toolbar"><div class="period-control" aria-label="K 线周期">${Object.entries(periodNames).map(([id, label]) => `<button class="period-button pressable" type="button" data-chart-period="${id}" data-metric-key="${metricKey}" aria-pressed="${period === id}">${label}</button>`).join("")}</div><span class="chart-status">${aggregateSeries(asset.marketSeries, period).length} 根${periodNames[period]}K</span></div>
+          <div class="chart-shell">${renderCandlestickChart(asset, period)}</div>
+          <section class="detail-section"><span class="detail-eyebrow">相关维度</span><div class="metric-grid">${Object.entries(asset.metrics).filter(([key]) => key !== metricKey).slice(0, 4).map(([key, item]) => `<button class="metric-card pressable" type="button" data-metric="${key}"><span class="metric-card-label">${item.label}</span><span class="metric-card-value">${item.value}</span><span class="metric-card-delta ${item.tone || ""}">${item.delta}</span></button>`).join("")}</div></section>
+          <section class="detail-section"><span class="detail-eyebrow">关键事件</span><div class="event-list">${asset.events.map(event => `<div class="event-item"><span class="event-date">${asset.marketSeries[event.index]?.date.slice(5) || "近期"}</span><span class="event-title">${event.title}</span></div>`).join("")}</div></section>
+          <section class="detail-section"><span class="detail-eyebrow">数据来源</span><p>${asset.sources.find(source => source.id === metric.sourceId)?.title || "站内模拟数据库"}</p><div class="button-row"><button class="secondary-button pressable" type="button" data-source-id="${metric.sourceId}">查看数据口径与来源</button></div></section>
+        </div>`,
+        { back: state.sheetHistory.length > 0, context: `${periodNames[period]}K · ${asset.marketSeries.length} 个交易日` }
+      );
+    }
+
+    function reasoningSheet(asset, traceId = "primary") {
+      const trace = asset.reasoning[traceId] || asset.reasoning.primary;
+      return sheetFrame("结论推断链", "每一步都区分事实与推断，并可继续追溯站内数据或站外来源。", reasoningPanel(asset, traceId), { back: state.sheetHistory.length > 0, context: `${asset.name} · ${trace.conclusion.state}` });
+    }
+
+    function sourceDetailSheet(asset, sourceId) {
+      const source = asset.sources.find(item => item.id === sourceId);
+      if (!source) return researchArchiveSheet(asset, "sources");
+      const action = source.type === "internal"
+        ? `<button class="primary-button pressable" type="button" data-metric="${source.metricKey || "price"}">打开站内数据</button>`
+        : source.status === "available"
+          ? `<a class="primary-button pressable" href="${source.url}" target="_blank" rel="noopener noreferrer">打开站外原文</a>`
+          : `<button class="secondary-button" type="button" disabled>站外原文暂不可用</button>`;
+      return sheetFrame("来源详情", "来源状态、引用片段与关联对象均保留在研究档案中。", `
+        <div class="archive-panel"><section class="detail-section"><span class="detail-eyebrow">${source.level} · ${source.type === "internal" ? "站内结构化数据" : "站外资料"}</span><h3>${source.title}</h3><p class="evidence-quote">“${source.quote}”</p><div class="evidence-meta"><span>${source.publisher}</span><span>·</span><span>${source.time}</span><span>·</span><span>${source.status === "available" ? "可核验" : "原文暂不可用"}</span></div></section><section class="detail-section"><span class="detail-eyebrow">关联内容</span><p>${source.relates}</p><div class="button-row">${action}</div></section><section class="detail-section"><span class="detail-eyebrow">原型说明</span><p>引用内容与数值均为模拟数据。外部地址只用于演示站外溯源路径，不代表该页面包含上述模拟内容。</p></section></div>`,
+        { back: true, context: `${asset.name} · ${source.publisher}` }
+      );
+    }
+
+    function evidenceSheet(asset) {
+      return sheetFrame(
+        "来源与证据",
+        `以下为用于原型测试的模拟资料。系统优先展示权威来源，并保留发布时间和对应原文。`,
+        asset.sources.map(source => `
+          <section class="detail-section">
+            <span class="detail-eyebrow">${source.level}</span>
+            <h3>${source.title}</h3>
+            <p class="evidence-quote">“${source.quote}”</p>
+            <div class="evidence-meta"><span>${source.time}</span><span>·</span><span>${asset.code}</span></div>
+            <div class="button-row"><button class="secondary-button pressable" type="button" data-toast="原型使用模拟资料，未连接外部原文">查看原文</button></div>
+          </section>
+        `).join("") + `
+          <section class="detail-section">
+            <h3>证据边界</h3>
+            <p>${asset.analysis.unknown}</p>
+          </section>
+        `
+      );
+    }
+
+    function thesisSheet(asset, editing = false) {
+      const body = editing ? `
+        <section class="detail-section">
+          <label for="thesis-core"><span class="detail-eyebrow">核心判断</span></label>
+          <textarea id="thesis-core" class="sheet-textarea">${asset.thesis.core}</textarea>
+          <div class="button-row">
+            <button class="primary-button pressable" type="button" data-save-thesis>保存判断</button>
+            <button class="secondary-button pressable" type="button" data-sheet="thesis">取消</button>
+          </div>
+        </section>
+      ` : `
+        <section class="detail-section"><span class="detail-eyebrow">核心判断</span><p>${asset.thesis.core}</p></section>
+        <section class="detail-section"><span class="detail-eyebrow">重点观察</span><p>${asset.thesis.watch}</p></section>
+        <section class="detail-section"><span class="detail-eyebrow">判断失效条件</span><p>${asset.thesis.invalid}</p></section>
+        <section class="detail-section"><span class="detail-eyebrow">关注周期</span><p>${asset.thesis.horizon}</p></section>
+        <div class="button-row"><button class="primary-button pressable" type="button" data-edit-thesis>编辑我的判断</button></div>
+      `;
+      return sheetFrame("我的判断", `${asset.name} · ${asset.thesis.state}。AI 可以协助起草，但只有你能确认或修改。`, body);
+    }
+
+    function impactSheet(asset) {
+      return sheetFrame(
+        "可能影响原判断",
+        "新信息只作为检查入口，系统不会自动改写你的判断。",
+        `
+          <section class="detail-section"><span class="detail-eyebrow">你原来的判断</span><p>${asset.thesis.core}</p></section>
+          <section class="detail-section"><span class="detail-eyebrow">这次的新信息</span><p>${asset.analysis.facts}</p></section>
+          <section class="detail-section"><span class="detail-eyebrow">当前影响</span><p>${asset.analysis.inference}</p></section>
+          <section class="detail-section"><span class="detail-eyebrow">你的选择</span><p>保持原判断不会删除这次证据。修改时，原版本仍会保留在历史记录中。</p>
+            <div class="button-row">
+              <button class="primary-button pressable" type="button" data-toast="已保留原判断，并记录本次证据">保持原判断</button>
+              <button class="secondary-button pressable" type="button" data-edit-thesis>修改观察项</button>
+              <button class="secondary-button pressable" type="button" data-toast="已设为稍后处理">稍后再看</button>
+            </div>
+          </section>
+        `
+      );
+    }
+
+    function assetsSheet() {
+      return sheetFrame(
+        "管理标的",
+        "动态只使用你主动添加的持仓和自选标的，不会根据浏览记录推断持仓。",
+        `<div>${Object.values(assets).map(asset => `
+          <div class="managed-asset">
+            <span class="asset-avatar ${asset.avatarClass}">${asset.short}</span>
+            <span><strong>${asset.name}</strong><small>${asset.kind} · ${asset.code}</small></span>
+            <button class="switch pressable" type="button" role="switch" aria-checked="true" aria-label="${asset.name}动态提醒"></button>
+          </div>
+        `).join("")}</div>
+        <div class="button-row"><button class="primary-button pressable" type="button" data-toast="原型中已模拟添加入口">添加持仓或自选</button></div>`
+      );
+    }
+
+    function settingsSheet() {
+      return sheetFrame(
+        "设置",
+        "你可以随时调整提醒和数据使用范围。所有开关仅改变当前原型状态。",
+        `
+          <div class="setting-row"><span class="setting-copy"><strong>重要动态提醒</strong><span>仅在相关、重要且证据充分时提醒</span></span><button class="switch pressable" type="button" role="switch" aria-checked="true" aria-label="重要动态提醒"></button></div>
+          <div class="setting-row"><span class="setting-copy"><strong>免打扰</strong><span>22:00 至次日 08:00</span></span><button class="switch pressable" type="button" role="switch" aria-checked="true" aria-label="免打扰"></button></div>
+          <div class="setting-row"><span class="setting-copy"><strong>只使用主动添加的标的</strong><span>不根据浏览行为推断持仓</span></span><button class="switch pressable" type="button" role="switch" aria-checked="true" aria-label="只使用主动添加的标的"></button></div>
+          <section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>当前使用模拟数据。未连接券商账户，也未授权任何真实持仓数据。</p></section>
+        `
+      );
+    }
+
+    function renderSheet(view = state.sheetView) {
+      const asset = assets[state.assetId];
+      const safeView = view || { type: "archive", tab: "thesis" };
+      const content = {
+        archive: () => researchArchiveSheet(asset, safeView.tab || "thesis", safeView.traceId || "primary"),
+        metric: () => marketSheet(asset, safeView.metricKey || "price", safeView.period || state.chartPeriod),
+        trace: () => reasoningSheet(asset, safeView.traceId || "primary"),
+        source: () => sourceDetailSheet(asset, safeView.sourceId),
+        evidence: () => researchArchiveSheet(asset, "sources"),
+        thesis: () => researchArchiveSheet(asset, "thesis"),
+        impact: () => impactSheet(asset),
+        assets: () => assetsSheet(),
+        settings: () => settingsSheet(),
+        editThesis: () => thesisSheet(asset, true)
+      };
+      sheet.innerHTML = (content[safeView.type] || content.archive)();
+    }
+
+    function openSheet(type, trigger = document.activeElement) {
+      lastTrigger = trigger instanceof HTMLElement ? trigger : null;
+      state.sheetHistory = [];
+      state.sheetView = type === "evidence" ? { type: "archive", tab: "sources" }
+        : type === "thesis" ? { type: "archive", tab: "thesis" }
+        : { type };
+      renderSheet();
+      sheet.classList.add("is-open");
+      sheet.setAttribute("aria-hidden", "false");
+      closeAssetPopover();
+      requestAnimationFrame(() => sheet.querySelector("#sheet-title")?.focus());
+    }
+
+    function navigateSheet(view, trigger = document.activeElement, pushHistory = true) {
+      if (!sheet.classList.contains("is-open")) {
+        lastTrigger = trigger instanceof HTMLElement ? trigger : null;
+        state.sheetHistory = [];
+        sheet.classList.add("is-open");
+        sheet.setAttribute("aria-hidden", "false");
+      } else if (pushHistory && state.sheetView) {
+        state.sheetHistory.push({ ...state.sheetView });
+      }
+      state.sheetView = view;
+      renderSheet();
+      requestAnimationFrame(() => sheet.querySelector("#sheet-title")?.focus());
+    }
+
+    function backSheet() {
+      const previous = state.sheetHistory.pop();
+      if (!previous) return;
+      state.sheetView = previous;
+      renderSheet();
+      requestAnimationFrame(() => sheet.querySelector("#sheet-title")?.focus());
+    }
+
+    function closeSheet() {
+      if (!sheet.classList.contains("is-open")) return;
+      sheet.classList.remove("is-open");
+      sheet.setAttribute("aria-hidden", "true");
+      state.sheetHistory = [];
+      state.sheetView = null;
+      if (lastTrigger?.isConnected) lastTrigger.focus();
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.classList.add("is-visible");
+      toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2200);
+    }
+
+    function saveThesis() {
+      const value = sheet.querySelector("#thesis-core")?.value.trim();
+      if (!value) {
+        showToast("判断内容不能为空");
+        return;
+      }
+      assets[state.assetId].thesis.core = value;
+      assets[state.assetId].thesis.state = "已由你确认";
+      state.sheetView = { type: "archive", tab: "thesis" };
+      renderSheet();
+      showToast("我的判断已更新");
+    }
+
+    function getTourComplete() {
+      try {
+        return sessionStorage.getItem(tourStorageKey) === "1";
+      } catch {
+        return false;
+      }
+    }
+
+    function setTourComplete() {
+      try {
+        sessionStorage.setItem(tourStorageKey, "1");
+      } catch {
+        // file:// environments may block storage; the tour still remains usable.
+      }
+    }
+
+    function renderTourPopover() {
+      const step = tourSteps[tourIndex];
+      const isLast = tourIndex === tourSteps.length - 1;
+      tourPopover.innerHTML = `
+        <div class="tour-step">${tourIndex + 1} / ${tourSteps.length}</div>
+        <h2 class="tour-title" id="tour-title">${step.title}</h2>
+        <p class="tour-body" id="tour-body">${step.body}</p>
+        <div class="tour-actions">
+          <button class="tour-skip pressable" type="button" data-tour-skip>跳过</button>
+          ${tourIndex > 0 ? '<button class="tour-back pressable" type="button" data-tour-prev>上一步</button>' : '<span aria-hidden="true"></span>'}
+          <button class="tour-next pressable" type="button" data-tour-next>${isLast ? "开始使用" : "下一步"}</button>
+        </div>
+      `;
+    }
+
+    function setFixedRect(element, left, top, width, height) {
+      element.style.left = `${Math.round(left)}px`;
+      element.style.top = `${Math.round(top)}px`;
+      element.style.width = `${Math.max(0, Math.round(width))}px`;
+      element.style.height = `${Math.max(0, Math.round(height))}px`;
+    }
+
+    function positionTour() {
+      if (!tourActive) return;
+      const step = tourSteps[tourIndex];
+      const target = document.querySelector(step.target);
+      if (!target) return;
+
+      const rect = target.getBoundingClientRect();
+      const gap = 10;
+      const left = Math.max(8, rect.left - gap);
+      const top = Math.max(8, rect.top - gap);
+      const right = Math.min(window.innerWidth - 8, rect.right + gap);
+      const bottom = Math.min(window.innerHeight - 8, rect.bottom + gap);
+      const width = right - left;
+      const height = bottom - top;
+
+      setFixedRect(tourMasks.top, 0, 0, window.innerWidth, top);
+      setFixedRect(tourMasks.left, 0, top, left, height);
+      setFixedRect(tourMasks.right, right, top, window.innerWidth - right, height);
+      setFixedRect(tourMasks.bottom, 0, bottom, window.innerWidth, window.innerHeight - bottom);
+      setFixedRect(tourFocusRing, left, top, width, height);
+      setFixedRect(tourBlocker, left, top, width, height);
+
+      const bubbleRect = tourPopover.getBoundingClientRect();
+      const bubbleWidth = bubbleRect.width || Math.min(324, window.innerWidth - 32);
+      const bubbleHeight = bubbleRect.height || 190;
+      const edge = 16;
+      const spacing = 18;
+      const canPlaceBelow = bottom + spacing + bubbleHeight <= window.innerHeight - edge;
+      const placement = canPlaceBelow ? "bottom" : "top";
+      const bubbleTop = canPlaceBelow
+        ? bottom + spacing
+        : Math.max(edge, top - spacing - bubbleHeight);
+      const idealLeft = left + width / 2 - bubbleWidth / 2;
+      const bubbleLeft = Math.max(edge, Math.min(idealLeft, window.innerWidth - bubbleWidth - edge));
+      const arrowLeft = Math.max(26, Math.min(left + width / 2 - bubbleLeft, bubbleWidth - 26));
+
+      tourPopover.style.left = `${Math.round(bubbleLeft)}px`;
+      tourPopover.style.top = `${Math.round(bubbleTop)}px`;
+      tourPopover.style.setProperty("--tour-arrow-left", `${Math.round(arrowLeft)}px`);
+      tourPopover.dataset.placement = placement;
+    }
+
+    function showTourStep(index) {
+      if (!tourActive) return;
+      tourIndex = Math.max(0, Math.min(index, tourSteps.length - 1));
+      const target = document.querySelector(tourSteps[tourIndex].target);
+      if (!target) {
+        if (tourIndex < tourSteps.length - 1) showTourStep(tourIndex + 1);
+        else finishTour(false);
+        return;
+      }
+
+      const targetRect = target.getBoundingClientRect();
+      const isOutsideViewport = targetRect.top < 8 || targetRect.bottom > window.innerHeight - 8;
+      if (isOutsideViewport && !target.closest(".topbar") && !target.closest(".composer-dock")) {
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+
+      renderTourPopover();
+      requestAnimationFrame(() => {
+        positionTour();
+        tourPopover.querySelector("[data-tour-next]")?.focus();
+      });
+    }
+
+    function startTour(force = false) {
+      if (tourActive || (!force && getTourComplete())) return;
+      clearTimeout(tourCloseTimer);
+      tourReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      closeAssetPopover();
+      closeSheet();
+      tourActive = true;
+      tourIndex = 0;
+      tourLayer.hidden = false;
+      appShell.inert = true;
+      renderTourPopover();
+      positionTour();
+      requestAnimationFrame(() => {
+        tourLayer.classList.add("is-active");
+        tourPopover.querySelector("[data-tour-next]")?.focus();
+      });
+    }
+
+    function finishTour(completed = true) {
+      if (!tourActive) return;
+      tourActive = false;
+      appShell.inert = false;
+      tourLayer.classList.remove("is-active");
+      if (completed) setTourComplete();
+      tourCloseTimer = setTimeout(() => {
+        tourLayer.hidden = true;
+        if (tourReturnFocus?.isConnected) tourReturnFocus.focus();
+      }, 190);
+    }
+
+    function trapTourFocus(event) {
+      if (event.key !== "Tab") return;
+      const controls = [...tourPopover.querySelectorAll("button:not([disabled])")];
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    composer.addEventListener("submit", event => {
+      event.preventDefault();
+      if (state.generating) {
+        stopStreamingAnswer();
+        return;
+      }
+      ask(promptInput.value);
+      promptInput.value = "";
+      promptInput.style.height = "auto";
+    });
+
+    promptInput.addEventListener("input", () => {
+      promptInput.style.height = "auto";
+      promptInput.style.height = `${Math.min(promptInput.scrollHeight, 128)}px`;
+    });
+
+    promptInput.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        composer.requestSubmit();
+      }
+    });
+
+    assetSwitcher.addEventListener("click", () => state.popoverOpen ? closeAssetPopover() : openAssetPopover());
+
+    document.addEventListener("click", event => {
+      const assetButton = event.target.closest("[data-asset]");
+      const promptButton = event.target.closest("[data-prompt]");
+      const analysisButton = event.target.closest("[data-analysis-toggle]");
+      const sheetButton = event.target.closest("[data-sheet]");
+      const closeSheetButton = event.target.closest("[data-close-sheet]");
+      const metricLink = event.target.closest("[data-metric]");
+      const traceLink = event.target.closest("[data-trace]");
+      const archiveTab = event.target.closest("[data-archive-tab]");
+      const sourceLink = event.target.closest("[data-source-id]");
+      const periodButton = event.target.closest("[data-chart-period]");
+      const sheetBackButton = event.target.closest("[data-sheet-back]");
+      const simulatePushButton = event.target.closest("[data-simulate-push]");
+      const switchButton = event.target.closest(".switch");
+      const startTourButton = event.target.closest("[data-start-tour]");
+      if (startTourButton) startTour(true);
+      if (event.target.closest("[data-tour-skip]")) finishTour(true);
+      if (event.target.closest("[data-tour-prev]")) showTourStep(tourIndex - 1);
+      if (event.target.closest("[data-tour-next]")) {
+        if (tourIndex === tourSteps.length - 1) finishTour(true);
+        else showTourStep(tourIndex + 1);
+      }
+      const pushContainer = event.target.closest("[data-push-id]");
+      if (pushContainer && !state.readPushes[state.assetId].includes(pushContainer.dataset.pushId)) {
+        state.readPushes[state.assetId].push(pushContainer.dataset.pushId);
+      }
+      if (assetButton) selectAsset(assetButton.dataset.asset);
+      if (promptButton) ask(promptButton.dataset.prompt);
+      if (analysisButton) toggleAnalysis(analysisButton.dataset.analysisToggle);
+      if (sheetButton) openSheet(sheetButton.dataset.sheet, sheetButton);
+      if (metricLink) navigateSheet({ type: "metric", metricKey: metricLink.dataset.metric, period: "day" }, metricLink, state.sheetView?.type !== "metric");
+      if (traceLink) navigateSheet({ type: "trace", traceId: traceLink.dataset.trace }, traceLink, state.sheetView?.type !== "trace");
+      if (archiveTab) navigateSheet({ type: "archive", tab: archiveTab.dataset.archiveTab }, archiveTab, false);
+      if (sourceLink) navigateSheet({ type: "source", sourceId: sourceLink.dataset.sourceId }, sourceLink, true);
+      if (periodButton) navigateSheet({ type: "metric", metricKey: periodButton.dataset.metricKey, period: periodButton.dataset.chartPeriod }, periodButton, false);
+      if (sheetBackButton) backSheet();
+      if (simulatePushButton) triggerPush(state.assetId, true);
+      if (closeSheetButton) closeSheet();
+      if (event.target.closest("[data-edit-thesis]")) {
+        state.sheetHistory.push({ ...state.sheetView });
+        state.sheetView = { type: "editThesis" };
+        renderSheet();
+        requestAnimationFrame(() => sheet.querySelector("textarea")?.focus());
+      }
+      if (event.target.closest("[data-save-thesis]")) saveThesis();
+      if (event.target.closest("[data-toast]")) showToast(event.target.closest("[data-toast]").dataset.toast);
+      if (switchButton) {
+        const next = switchButton.getAttribute("aria-checked") !== "true";
+        switchButton.setAttribute("aria-checked", String(next));
+        showToast(next ? "已开启" : "已关闭");
+      }
+      if (!event.target.closest(".asset-control")) closeAssetPopover();
+    });
+
+    document.addEventListener("keydown", event => {
+      if (tourActive) {
+        trapTourFocus(event);
+        if (event.key === "Escape") finishTour(true);
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          if (tourIndex === tourSteps.length - 1) finishTour(true);
+          else showTourStep(tourIndex + 1);
+        }
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          showTourStep(tourIndex - 1);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        if (sheet.classList.contains("is-open")) closeSheet();
+        else closeAssetPopover();
+      }
+    });
+
+    window.addEventListener("resize", () => requestAnimationFrame(positionTour));
+    conversationScroll.addEventListener("scroll", () => requestAnimationFrame(positionTour), { passive: true });
+
+    renderConversation();
+    requestAnimationFrame(() => setTimeout(() => startTour(false), 260));
+    setTimeout(() => triggerPush("TCEHY", false), 3600);
+  </script>
+</body>
+</html>
