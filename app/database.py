@@ -71,6 +71,64 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS importance_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    signal_date TEXT NOT NULL,
+    category TEXT NOT NULL CHECK (category IN ('public', 'upstream', 'market', 'cross_asset')),
+    direction TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (direction IN ('positive', 'negative', 'mixed', 'neutral', 'unknown')),
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    factor_scores_json TEXT NOT NULL DEFAULT '{}',
+    raw_score REAL NOT NULL,
+    score REAL NOT NULL,
+    calibrated_confidence REAL,
+    formula_version TEXT NOT NULL DEFAULT 'importance-v1',
+    source_status TEXT NOT NULL DEFAULT 'fresh'
+        CHECK (source_status IN ('fresh', 'cached', 'decayed', 'baseline')),
+    origin_signal_id INTEGER REFERENCES importance_signals(id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS importance_signal_evidence (
+    signal_id INTEGER NOT NULL REFERENCES importance_signals(id) ON DELETE CASCADE,
+    evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) ON DELETE CASCADE,
+    PRIMARY KEY (signal_id, evidence_id)
+);
+
+CREATE TABLE IF NOT EXISTS importance_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    score_date TEXT NOT NULL,
+    public_score REAL NOT NULL,
+    upstream_score REAL NOT NULL,
+    market_score REAL,
+    cross_asset_score REAL NOT NULL,
+    composite_score REAL,
+    dominant_category TEXT,
+    status TEXT NOT NULL CHECK (status IN ('complete', 'incomplete', 'cached')),
+    formula_version TEXT NOT NULL DEFAULT 'importance-v1',
+    details_json TEXT NOT NULL DEFAULT '{}',
+    calculated_at TEXT NOT NULL,
+    UNIQUE (asset_id, score_date, formula_version)
+);
+
+CREATE TABLE IF NOT EXISTS thesis_drafts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    base_version INTEGER NOT NULL DEFAULT 0,
+    selected_message_ids_json TEXT NOT NULL DEFAULT '[]',
+    selected_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    ai_suggestion_json TEXT NOT NULL DEFAULT '{}',
+    user_content_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'confirmed', 'discarded')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    confirmed_thesis_id INTEGER REFERENCES theses(id)
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -81,11 +139,35 @@ CREATE INDEX IF NOT EXISTS idx_theses_asset ON theses(asset_id, version);
 CREATE INDEX IF NOT EXISTS idx_analyses_asset ON analyses(asset_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_asset ON messages(asset_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_evidence_stock ON evidence(stock_code);
+CREATE INDEX IF NOT EXISTS idx_importance_signal_asset_date
+    ON importance_signals(asset_id, signal_date, category);
+CREATE INDEX IF NOT EXISTS idx_importance_daily_asset_date
+    ON importance_daily(asset_id, score_date);
+CREATE INDEX IF NOT EXISTS idx_thesis_draft_asset_status
+    ON thesis_drafts(asset_id, status, updated_at);
 """
 
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+THESIS_COLUMNS = {
+    "change_summary_json": "TEXT NOT NULL DEFAULT '{}'",
+    "source_message_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+    "source_evidence_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+    "creation_method": "TEXT NOT NULL DEFAULT 'manual'",
+    "base_version": "INTEGER",
+}
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    """创建新表并为旧版 theses 表补充字段，重复执行安全。"""
+    conn.executescript(SCHEMA)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(theses)")}
+    for column, definition in THESIS_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE theses ADD COLUMN {column} {definition}")
 
 
 _schema_ready = False
@@ -99,7 +181,7 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if not _schema_ready:
-        conn.executescript(SCHEMA)
+        ensure_schema(conn)
         _schema_ready = True
     try:
         yield conn
@@ -114,7 +196,7 @@ def get_conn():
 def init_db() -> None:
     settings.prepare()
     with get_conn() as conn:
-        conn.executescript(SCHEMA)
+        ensure_schema(conn)
 
 
 def query(sql: str, params: tuple = ()) -> list[dict]:
