@@ -1,64 +1,47 @@
-# AI 投研助手
+# TradingBuddy
 
-本仓库包含 AI 投研助手的产品材料、桌面端原型和一个可在本机运行的 MVP。MVP 的主流程是：添加 A 股标的 → 查看真实行情与事件 → 生成有证据引用的 AI 分析 → 继续追问 → 保存自己的投资判断。
+本地优先的 AI 投研助手 MVP。用户可添加 A 股标的，查看真实行情与公开事件，基于可回溯证据生成研究分析、继续追问，并维护自己的投资判断。
 
-## 当前内容
+项目只提供研究信息整理，不连接券商、不执行交易，也不输出买卖、仓位、目标价或交易时点建议。
 
-- `ai-investment-assistant-desktop.html`：桌面端主交互原型
-- `ai-investment-assistant-evaluation.html`：评估方案可视化页面
-- `AI投研助手MVP交互方案与PRD.md`：MVP 产品需求与交互方案
-- `AI投研助手产品与交互方案说明.md`：产品定位、交互与责任边界
-- `AI投研助手噪音过滤与分析可信度评估方案.md`：噪音过滤和分析可信度评估
-- `AI投研助手产品定位上线评估方案.md`：上线评估指标与判定规则
-- `docs/superpowers/specs/`：产品原型、研究档案、导览和本机 MVP 设计文档
-- `docs/superpowers/plans/`：原型和交互实现计划
-- `frontend/`：FastAPI 托管的本机 MVP 前端
-- `app/`：FastAPI、SQLite、行情/事件/证据和 AI 服务
-- `start.sh`：创建环境并启动本机服务
-- `交付内容/`、`交付结果/`：历史交付版本
-- `tests/prototype.test.mjs`：现有原型结构冒烟检查
+## 仓库结构
 
-## MVP 技术方向
+- `app/`：FastAPI、SQLite、本地资产管理、行情、事件、证据与 AI 分析服务。
+- `frontend/`：由 FastAPI 托管的原生 HTML/CSS/JavaScript 界面。
+- `prompts/`：有证据约束的模型提示词。
+- `tests/`：智谱/OpenAI 兼容接口的最小回归测试。
+- `docs/product/`：产品与交互说明、MVP PRD。
+- `docs/technical/`：本机 MVP 的技术设计与接口约定。
 
-本机 MVP 采用 FastAPI + 现有 HTML/CSS/JavaScript 原型 + SQLite。行情和技术指标复用个人项目 [A-Share-Data-Visualization](https://github.com/Venestiteration/A-Share-Data-Visualization) 中的 Python 代码，资讯与公告使用真实数据源，AI 使用 OpenAI API。
+开发前建议先阅读：
 
-详细方案见：
+- [产品与交互说明](docs/product/product-and-interaction.md)
+- [MVP PRD](docs/product/mvp-prd.md)
+- [本机 MVP 技术设计](docs/technical/local-mvp-design.md)
 
-[`docs/superpowers/specs/2026-09-12-ai-investment-assistant-local-mvp-design.md`](docs/superpowers/specs/2026-09-12-ai-investment-assistant-local-mvp-design.md)
+## 本地运行
 
-## 本机 MVP 运行
-
-需要 Python 3.9+。首次运行会创建 `.venv`、安装依赖并生成 `.env`：
+需要 Python 3.9+。首次启动会创建虚拟环境、安装依赖并生成 `.env`：
 
 ```bash
 ./start.sh
 ```
 
-然后打开 <http://127.0.0.1:8000>。编辑 `.env` 填写 `OPENAI_API_KEY` 和你有权限调用的 `OPENAI_MODEL` 后重启服务，才能使用真实 AI 分析；未配置模型时仍可查看行情、事件和证据，但分析会明确返回失败状态，不会生成替代结论。
+打开 <http://127.0.0.1:8000>。行情和事件可在未配置模型时使用；AI 分析需要在 `.env` 配置模型后重启服务：
 
-也可以手动运行：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```env
+OPENAI_API_KEY=<your-api-key>
+OPENAI_MODEL=glm-5.3
+OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
 ```
 
-健康检查：<http://127.0.0.1:8000/api/health>。
+`OPENAI_BASE_URL` 留空时使用 OpenAI；填写智谱地址时，服务会自动使用其 Chat Completions 兼容接口。
 
-## 演示主流程
+## 最小验证
 
-1. 点击“添加标的”，输入 `600519` 或搜索股票名称。
-2. 查看最新价、日线指标和近期事件；页面会显示数据时间、抓取时间及缓存降级状态。
-3. 选择一条事件并点击“生成分析”。
-4. 展开事实、推断、未知项和下一步核验；点击证据编号查看来源详情。
-5. 在“继续追问”中询问事件与当前判断的关系。
-6. 保存“我的判断”后重启服务，SQLite 会保留资产和判断版本。
+```bash
+python3 -m unittest tests/test_zhipu_compat.py -v
+curl http://127.0.0.1:8000/api/health
+```
 
-公开行情、新闻和公告接口可能受网络、字段变化、限流和授权范围影响。缺少数据时页面保留可用内容并显示错误，不把缺失内容包装成事实。模型输出只用于研究信息整理，不构成投资建议；本项目不连接券商、不执行交易，也不提供买卖、仓位、目标价或交易时点建议。
-
-## 说明
-
-压缩包、环境变量、缓存、数据库和本地运行产物不会提交。根目录的 `ai-investment-assistant-desktop.html` 仍保留为历史静态原型；实际运行 MVP 使用 `frontend/`。
+公开行情、新闻和公告接口可能受网络、字段变化、限流和授权范围影响。页面会展示数据时间、抓取时间和缓存状态；数据或模型不可用时不会用模拟内容替代真实结果。

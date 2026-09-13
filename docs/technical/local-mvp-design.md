@@ -55,7 +55,7 @@ MVP 只闭环一个核心场景：
 
 ```text
 浏览器
-  └─ 现有 HTML/CSS/JavaScript 原型
+  └─ frontend/（HTML/CSS/JavaScript）
        ├─ 标的切换与动态
        ├─ 对话输入与生成状态
        └─ 研究档案与证据抽屉
@@ -69,12 +69,12 @@ FastAPI
              │
              ├─ SQLite：资产、判断、证据、分析和对话
              ├─ 腾讯 / 新浪 / AkShare：行情、新闻和公告
-             └─ OpenAI Responses API：结构化分析
+             └─ OpenAI 兼容模型接口：结构化分析
 ```
 
 选择该架构的原因：
 
-- 当前 HTML 原型已经包含完整的信息层级、详情抽屉、导览和交互反馈，直接改造比在 Streamlit 中重写更能保留产品完成度；
+- 当前 `frontend/` 已包含 MVP 的信息层级、详情抽屉和交互反馈，继续在原生 HTML/CSS/JavaScript 上迭代可避免不必要的前端构建链；
 - 个人 GitHub 项目中的行情采集、字段标准化和技术指标均为 Python 代码，FastAPI 可以直接复用；
 - 前后端使用简单 HTTP/SSE 接口，边界明确，不需要引入 React、Vue、Node 构建链或自定义 Streamlit 组件；
 - SQLite 和单进程服务适合本机演示，部署、迁移和清理成本低。
@@ -83,7 +83,7 @@ FastAPI
 
 ### 4.1 保留内容
 
-以 `ai-investment-assistant-desktop.html` 为前端基础，保留：
+以 `frontend/` 为前端基础，保留：
 
 - 顶部标的切换器；
 - 以“动态”为主入口的对话页面；
@@ -306,12 +306,11 @@ invalid_conditions, status, created_at
 ## 9. 建议文件结构
 
 ```text
-ai-investment-assistant-mvp/
+TradingBuddy/
 ├── app/
 │   ├── main.py
 │   ├── config.py
 │   ├── database.py
-│   ├── schemas.py
 │   ├── routers/
 │   │   ├── assets.py
 │   │   ├── research.py
@@ -330,7 +329,7 @@ ai-investment-assistant-mvp/
 ├── data/
 │   └── assistant.db
 ├── tests/
-│   └── smoke_test.py
+│   └── test_zhipu_compat.py
 ├── .env.example
 ├── requirements.txt
 ├── start.sh
@@ -476,4 +475,3 @@ cp .env.example .env
 - 产品只用于研究信息整理，不构成投资建议。
 
 这些限制不阻碍本机作品演示，但必须在页面与 README 中明确写出。
-
