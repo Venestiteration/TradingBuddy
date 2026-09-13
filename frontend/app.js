@@ -759,6 +759,11 @@ function backSheet() {
   state.sheetData = null;
   renderSheet();
   requestAnimationFrame(() => els.sheet.querySelector("#sheet-title")?.focus());
+  if (previous.type === "source" && previous.sourceId) loadSourceDetail(previous.sourceId);
+  if (previous.type === "importanceDay" && previous.date) loadImportanceDay(previous.date);
+  if (previous.type === "importanceCategory" && previous.date && previous.category) {
+    loadImportanceCategory(previous.date, previous.category);
+  }
 }
 
 function toggleAnalysis(id) {

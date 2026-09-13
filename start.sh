@@ -38,5 +38,6 @@ if [ ! -f .env ]; then
   cp .env.example .env
 fi
 
-echo "==> 启动服务：http://127.0.0.1:${APP_PORT:-8000}"
-exec python -m uvicorn app.main:app --host "${APP_HOST:-127.0.0.1}" --port "${APP_PORT:-8000}"
+APP_PORT_VALUE="${APP_PORT:-${PORT:-8000}}"
+echo "==> 启动服务：http://127.0.0.1:${APP_PORT_VALUE}"
+exec python -m uvicorn app.main:app --host "${APP_HOST:-127.0.0.1}" --port "${APP_PORT_VALUE}"
