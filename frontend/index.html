@@ -3,132 +3,63 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>AI 投研助手 · 本机 MVP</title>
-  <link rel="stylesheet" href="/styles.css">
+  <title>动态 · TradingBuddy</title>
+  <link rel="stylesheet" href="/styles.css?v=20260913-scroll-fix">
 </head>
 <body data-api-root="/api">
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">⌁</span>
-      <div><strong>AI 投研助手</strong><small>本机 MVP · 证据优先</small></div>
+  <div class="app-shell">
+    <header class="topbar chrome">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 9.2 6l3.1 7.3 2.1-4.8L19 19" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span>动态</span>
+      </div>
+      <div class="asset-control">
+        <button id="asset-switcher" class="asset-switcher pressable" type="button" aria-haspopup="listbox" aria-expanded="false" data-tour="asset">
+          <span id="asset-switcher-label">添加一个标的开始</span>
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m6 8 4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="asset-popover" id="asset-popover" role="listbox" aria-label="选择标的"></div>
+      </div>
+      <div class="top-actions">
+        <button class="icon-button pressable" type="button" data-start-tour aria-label="使用指引" title="使用指引">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M9.7 9a2.45 2.45 0 0 1 4.75.8c0 1.7-2.45 2-2.45 3.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg>
+        </button>
+        <button class="icon-button pressable" type="button" data-sheet="archive" data-tour="archive" aria-label="研究档案" title="研究档案">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.5 18.5h7M9 21h6M8 14.2a6.5 6.5 0 1 1 8 0c-1 .75-1.35 1.55-1.5 2.3h-5c-.15-.75-.5-1.55-1.5-2.3Z" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-button pressable" type="button" data-sheet="settings" aria-label="设置" title="设置">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.65"/><path d="M19 13.2v-2.4l-2.1-.7a7 7 0 0 0-.6-1.4l1-2-1.7-1.7-2 1a7 7 0 0 0-1.4-.6L11.5 3h-2.4l-.7 2.1a7 7 0 0 0-1.4.6l-2-1-1.7 1.7-1 2 2.1.7a7 7 0 0 0-.6 1.4l-2.1.7v2.4l2.1.7a7 7 0 0 0 .6 1.4l-1 2L5 18.7l2-1a7 7 0 0 0 1.4.6l.7 2.1h2.4l.7-2.1a7 7 0 0 0 1.4-.6l2 1 1.7-1.7-1-2a7 7 0 0 0 .6-1.4l2.1-.7Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </header>
+    <div class="workspace">
+      <div class="conversation-scroll">
+        <main id="conversation" class="conversation" aria-live="polite"></main>
+      </div>
+      <div class="composer-dock">
+        <form id="composer" class="composer chrome" data-tour="composer">
+          <textarea name="prompt" aria-label="继续追问" placeholder="继续问关于当前标的的问题…"></textarea>
+          <button class="send-button pressable" type="submit" aria-label="发送">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </form>
+        <p class="composer-note">研究信息整理仅供参考，不构成投资建议</p>
+      </div>
     </div>
-    <div class="toolbar">
-      <label class="sr-only" for="asset-select">当前标的</label>
-      <select id="asset-select" data-tour="asset" aria-label="当前标的">
-        <option value="">添加一个标的开始</option>
-      </select>
-      <button class="button secondary" id="add-asset-button" type="button">添加标的</button>
-      <button class="button secondary" id="toggle-type-button" type="button" hidden>标记持仓</button>
-      <button class="button icon" id="refresh-button" type="button" aria-label="刷新数据" title="刷新数据">↻</button>
-    </div>
-  </header>
-
-  <div id="global-status" class="status-bar" role="status" aria-live="polite"></div>
-
-  <main class="page-shell">
-    <section id="empty-state" class="empty-state">
-      <div class="eyebrow">LOCAL RESEARCH WORKSPACE</div>
-      <h1>把一个标的的事实、事件和判断放在一起。</h1>
-      <p>输入六位 A 股代码即可开始。行情、新闻和公告来自外部数据源；AI 只基于当前页面已加载的证据进行分析。</p>
-      <button class="button primary" type="button" data-action="open-add">添加第一个标的</button>
-      <p class="muted small">本工具只整理研究信息，不提供买卖、仓位、目标价或交易时点建议。</p>
-    </section>
-
-    <section id="workspace" class="workspace" hidden>
-      <div id="overview-loading" class="loading-card" hidden>正在加载行情与事件…</div>
-
-      <section class="hero-card" aria-labelledby="asset-title">
-        <div>
-          <div class="eyebrow" id="asset-meta">标的</div>
-          <h1 id="asset-title">—</h1>
-          <p id="asset-subtitle" class="muted">等待数据</p>
-        </div>
-        <div id="snapshot" class="snapshot-grid" aria-label="行情摘要"></div>
-      </section>
-
-      <div id="data-notices" class="notice-stack"></div>
-
-      <section class="content-grid">
-        <div class="main-column">
-          <section class="panel" data-tour="dynamic" aria-labelledby="events-title">
-            <div class="panel-heading">
-              <div><div class="eyebrow">DYNAMIC</div><h2 id="events-title">近期动态</h2></div>
-              <span id="events-meta" class="muted small"></span>
-            </div>
-            <div id="events" class="event-list"></div>
-          </section>
-
-          <section class="panel" data-tour="thesis" aria-labelledby="analysis-title">
-            <div class="panel-heading">
-              <div><div class="eyebrow">GROUNDED ANALYSIS</div><h2 id="analysis-title">基于证据的分析</h2></div>
-              <span id="analysis-state" class="status-pill neutral">尚未分析</span>
-            </div>
-            <div id="analysis" class="analysis-empty">选择一条动态后生成分析。切换标的或刷新页面不会自动调用模型。</div>
-            <div id="analysis-actions" class="button-row" hidden>
-              <button id="analyze-button" class="button primary" type="button">生成分析</button>
-              <button id="open-source-button" class="button secondary" type="button">查看证据</button>
-            </div>
-          </section>
-
-          <section class="panel" data-tour="actions" aria-labelledby="chat-title">
-            <div class="panel-heading">
-              <div><div class="eyebrow">FOLLOW-UP</div><h2 id="chat-title">继续追问</h2></div>
-            </div>
-            <div id="messages" class="messages"></div>
-            <form id="chat-form" class="chat-form">
-              <textarea id="chat-input" rows="2" maxlength="2000" placeholder="例如：这条事件触及我原来判断中的哪个假设？"></textarea>
-              <button class="button primary" type="submit">发送问题</button>
-            </form>
-          </section>
-        </div>
-
-        <aside class="side-column">
-          <section class="panel" aria-labelledby="market-title">
-            <div class="panel-heading"><div><div class="eyebrow">MARKET</div><h2 id="market-title">日线与指标</h2></div></div>
-            <div id="chart" class="chart" aria-label="日线价格图"></div>
-            <div id="indicators" class="indicator-list"></div>
-          </section>
-
-          <section class="panel" aria-labelledby="thesis-form-title">
-            <div class="panel-heading"><div><div class="eyebrow">YOUR THESIS</div><h2 id="thesis-form-title">我的判断</h2></div></div>
-            <form id="thesis-form" class="stack-form">
-              <label>核心判断<textarea id="thesis-core" rows="4" maxlength="2000" placeholder="写下你当前确认的判断"></textarea></label>
-              <label>重点观察<textarea id="thesis-watch" rows="3" maxlength="2000" placeholder="哪些变量值得继续跟踪"></textarea></label>
-              <label>失效条件<textarea id="thesis-invalid" rows="3" maxlength="2000" placeholder="什么变化会让判断需要重审"></textarea></label>
-              <button class="button secondary" type="submit">保存新版本</button>
-            </form>
-            <div id="thesis-history" class="history-list"></div>
-          </section>
-
-          <section class="panel" aria-labelledby="sources-title">
-            <div class="panel-heading"><div><div class="eyebrow">SOURCES</div><h2 id="sources-title">来源与证据</h2></div></div>
-            <div id="sources" class="source-list"></div>
-          </section>
-        </aside>
-      </section>
-    </section>
-  </main>
-
-  <div id="add-modal" class="modal-backdrop" hidden>
-    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
-      <div class="modal-heading"><div><div class="eyebrow">ADD ASSET</div><h2 id="add-title">添加标的</h2></div><button class="icon close-modal" type="button" aria-label="关闭">×</button></div>
-      <form id="add-form" class="stack-form">
-        <label>股票代码或名称<input id="stock-query" autocomplete="off" placeholder="例如 600519 或 贵州茅台" required></label>
-        <div class="button-row"><button class="button secondary" id="search-button" type="button">搜索</button><button class="button primary" id="direct-add-button" type="submit">直接添加代码</button></div>
-        <div id="search-results" class="search-results"></div>
-      </form>
-      <p class="muted small">搜索依赖股票清单接口；若接口暂不可用，可以直接输入六位代码添加。</p>
-    </section>
   </div>
-
-  <div id="evidence-modal" class="modal-backdrop" hidden>
-    <section class="modal evidence-modal" role="dialog" aria-modal="true" aria-labelledby="evidence-title">
-      <div class="modal-heading"><div><div class="eyebrow">EVIDENCE</div><h2 id="evidence-title">证据详情</h2></div><button class="icon close-evidence" type="button" aria-label="关闭">×</button></div>
-      <div id="evidence-detail"></div>
-    </section>
+  <aside id="detail-sheet" class="sheet" role="dialog" aria-modal="false" aria-hidden="true" aria-labelledby="sheet-title" tabindex="-1"></aside>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="tour-layer" class="tour-layer" hidden>
+    <div class="tour-mask tour-mask-top"></div>
+    <div class="tour-mask tour-mask-left"></div>
+    <div class="tour-mask tour-mask-right"></div>
+    <div class="tour-mask tour-mask-bottom"></div>
+    <div id="tour-focus-ring" class="tour-focus-ring"></div>
+    <div id="tour-blocker" class="tour-blocker" aria-hidden="true"></div>
+    <section id="tour-popover" class="tour-popover" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body"></section>
   </div>
-
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=20260913-importance"></script>
 </body>
 </html>
