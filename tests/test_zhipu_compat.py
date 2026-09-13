@@ -76,6 +76,43 @@ class ZhipuCompatibilityTest(unittest.TestCase):
             ai.settings.openai_base_url = original_base_url
             ai.settings.openai_model = original_model
 
+    def test_structured_model_accepts_custom_schema(self):
+        original_client = ai._client
+        original_base_url = ai.settings.openai_base_url
+        original_model = ai.settings.openai_model
+        try:
+            fake = FakeClient()
+            fake.chat.completions.create = lambda **kwargs: SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=json.dumps({"summary": "已整理"})
+                        )
+                    )
+                ]
+            )
+            ai._client = lambda: fake
+            ai.settings.openai_base_url = "https://open.bigmodel.cn/api/paas/v4/"
+            ai.settings.openai_model = "glm-5.3"
+
+            result = ai.call_structured_model(
+                "整理判断",
+                {"messages": []},
+                {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                    "additionalProperties": False,
+                },
+                "thesis_draft",
+            )
+
+            self.assertEqual(result, {"summary": "已整理"})
+        finally:
+            ai._client = original_client
+            ai.settings.openai_base_url = original_base_url
+            ai.settings.openai_model = original_model
+
 
 if __name__ == "__main__":
     unittest.main()

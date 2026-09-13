@@ -153,8 +153,14 @@ def _parse_json_response(raw: Any) -> dict:
         raise AIError("schema", "模型输出不是合法 JSON")
 
 
-def _call_model(instructions: str, context: dict) -> dict:
-    """调用 OpenAI 或智谱兼容接口并解析 JSON。失败抛 AIError。"""
+def call_structured_model(
+    instructions: str,
+    context: dict,
+    schema: dict[str, Any],
+    schema_name: str,
+    max_tokens: int = 2400,
+) -> dict:
+    """按指定 JSON Schema 调用模型，兼容 OpenAI Responses 与智谱 Chat API。"""
     client = _client()
     try:
         if _uses_zhipu_chat_api():
@@ -168,7 +174,7 @@ def _call_model(instructions: str, context: dict) -> dict:
                         "role": "system",
                         "content": (
                             f"{instructions}\n\n请严格返回 JSON，不要输出 Markdown。"
-                            f"JSON 结构如下：{json.dumps(ANALYSIS_SCHEMA, ensure_ascii=False)}"
+                            f"JSON 结构如下：{json.dumps(schema, ensure_ascii=False)}"
                         ),
                     },
                     {
@@ -179,7 +185,7 @@ def _call_model(instructions: str, context: dict) -> dict:
                 response_format={"type": "json_object"},
                 extra_body=_zhipu_extra_body(),
                 temperature=0.2,
-                max_tokens=2400,
+                max_tokens=max_tokens,
             )
             raw = response.choices[0].message.content
         else:
@@ -190,13 +196,13 @@ def _call_model(instructions: str, context: dict) -> dict:
                 text={
                     "format": {
                         "type": "json_schema",
-                        "name": "grounded_analysis",
+                        "name": schema_name,
                         "strict": True,
-                        "schema": ANALYSIS_SCHEMA,
+                        "schema": schema,
                     },
                 },
                 temperature=0.2,
-                max_output_tokens=2400,
+                max_output_tokens=max_tokens,
             )
             raw = getattr(response, "output_text", None)
             if not raw:
@@ -218,6 +224,16 @@ def _call_model(instructions: str, context: dict) -> dict:
         raise AIError("network", f"模型调用失败: {text[:200]}") from exc
 
     return _parse_json_response(raw)
+
+
+def _call_model(instructions: str, context: dict) -> dict:
+    """调用投研分析模型并解析既有分析结构。"""
+    return call_structured_model(
+        instructions,
+        context,
+        ANALYSIS_SCHEMA,
+        "grounded_analysis",
+    )
 
 
 def validate_result(result: dict, evidence_lookup: dict[str, dict]) -> tuple[dict, list[str]]:
