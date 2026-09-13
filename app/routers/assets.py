@@ -241,12 +241,23 @@ def refresh_overview(asset_id: int) -> dict:
 @router.get("/assets/{asset_id}/theses")
 def list_theses(asset_id: int) -> dict:
     _asset_row(asset_id)
+    history = db.query(
+        "SELECT * FROM theses WHERE asset_id = ? ORDER BY version DESC",
+        (asset_id,),
+    )
+    for row in history:
+        for field, fallback in (
+            ("change_summary_json", {}),
+            ("source_message_ids_json", []),
+            ("source_evidence_ids_json", []),
+        ):
+            try:
+                row[field.removesuffix("_json")] = json.loads(row.get(field) or json.dumps(fallback))
+            except json.JSONDecodeError:
+                row[field.removesuffix("_json")] = fallback
     return {
         "current": _current_thesis(asset_id),
-        "history": db.query(
-            "SELECT * FROM theses WHERE asset_id = ? ORDER BY version DESC",
-            (asset_id,),
-        ),
+        "history": history,
     }
 
 
@@ -257,8 +268,10 @@ def create_thesis(asset_id: int, payload: ThesisCreate) -> dict:
     version = (current or {}).get("version", 0) + 1
     thesis_id = db.execute(
         "INSERT INTO theses (asset_id, version, core_thesis, watch_variables, "
-        "invalid_conditions, status, created_at) VALUES (?, ?, ?, ?, ?, '已由你确认', ?)",
+        "invalid_conditions, status, created_at, creation_method, base_version) "
+        "VALUES (?, ?, ?, ?, ?, '已由你确认', ?, 'manual', ?)",
         (asset_id, version, payload.core_thesis.strip(),
-         payload.watch_variables.strip(), payload.invalid_conditions.strip(), db.utcnow()),
+         payload.watch_variables.strip(), payload.invalid_conditions.strip(), db.utcnow(),
+         (current or {}).get("version", 0)),
     )
     return db.query_one("SELECT * FROM theses WHERE id = ?", (thesis_id,))

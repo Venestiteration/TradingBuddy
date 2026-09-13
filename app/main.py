@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import init_db
-from .routers import assets, chat, importance, research
+from .routers import assets, chat, importance, research, theses
 
 
 def create_app() -> FastAPI:
@@ -15,6 +15,7 @@ def create_app() -> FastAPI:
     # 先注册 API 路由，再托管前端静态文件，保证 /api 优先匹配。
     app.include_router(assets.router)
     app.include_router(importance.router)
+    app.include_router(theses.router)
     app.include_router(research.router)
     app.include_router(chat.router)
 
