@@ -11,6 +11,7 @@ const app = readFileSync(path.join(root, "frontend/app.js"), "utf8");
 const apiModule = readFileSync(path.join(root, "frontend/api.js"), "utf8");
 const importanceChart = readFileSync(path.join(root, "frontend/importance-chart.js"), "utf8");
 const importanceDetail = readFileSync(path.join(root, "frontend/importance-detail.js"), "utf8");
+const thesisWorkflow = readFileSync(path.join(root, "frontend/thesis-workflow.js"), "utf8");
 
 test("MVP preserves the prototype interaction shell", () => {
   for (const marker of [
@@ -66,4 +67,15 @@ test("importance timeline is keyboard accessible and drillable", () => {
   assert.ok(apiModule.includes("export async function api"));
   assert.ok(styles.includes(".importance-timeline"));
   assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
+});
+
+test("conversation conclusions require user confirmation before versioning", () => {
+  assert.ok(app.includes("data-build-thesis-draft"));
+  assert.ok(app.includes("thesisDraft"));
+  assert.ok(thesisWorkflow.includes("data-thesis-message"));
+  assert.ok(thesisWorkflow.includes("data-thesis-evidence"));
+  assert.ok(thesisWorkflow.includes("data-accept-thesis-field"));
+  assert.ok(thesisWorkflow.includes("data-confirm-thesis-version"));
+  assert.ok(thesisWorkflow.includes("历史记录"));
+  assert.ok(styles.includes(".thesis-draft-banner"));
 });

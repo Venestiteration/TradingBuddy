@@ -228,6 +228,8 @@ def _signal_payload(signal: dict) -> dict:
         "source_status": signal["source_status"],
         "formula_version": signal["formula_version"],
         "factor_scores": factor_scores, "evidence": evidence,
+        "evidence_ids": [item["evidence_id"] for item in evidence],
+        "calibrated_confidence": signal.get("calibrated_confidence"),
     }
 
 

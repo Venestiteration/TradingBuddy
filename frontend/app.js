@@ -1,6 +1,13 @@
-import { API_ROOT, api } from "./api.js";
+import { api, streamPost } from "./api.js";
 import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
+import {
+  collectThesisForm,
+  suggestionValue,
+  thesisContextSheet,
+  thesisHistorySheet,
+  thesisReviewSheet,
+} from "./thesis-workflow.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -22,6 +29,10 @@ const state = {
   importanceRows: [],
   importanceDays: 30,
   importanceError: "",
+  thesisContext: null,
+  thesisDraft: null,
+  thesisDraftPending: false,
+  thesisAcceptedChanges: {},
   readEvents: new Set(),
   tourIndex: 0,
   tourActive: false,
@@ -293,6 +304,17 @@ function renderDynamicMessage(asset, event) {
   `;
 }
 
+function renderThesisDraftBanner() {
+  const thesisDate = state.overview?.thesis?.created_at || "";
+  const eligible = (state.overview?.messages || []).filter(
+    (message) => message.role === "assistant" && (!thesisDate || message.created_at > thesisDate),
+  );
+  if (!eligible.length) return "";
+  return `<aside class="thesis-draft-banner"><div><strong>本轮对话形成了 ${eligible.length} 个可沉淀观点</strong>
+    <span>整理前可增删对话与证据范围</span></div>
+    <button class="secondary-button pressable" type="button" data-build-thesis-draft>整理为判断草稿</button></aside>`;
+}
+
 function renderConversation() {
   renderAssetPopover();
   const asset = state.overview?.asset || selectedAsset();
@@ -307,7 +329,8 @@ function renderConversation() {
       + renderImportanceChart(state.importanceRows, { escapeHtml })
       + renderDynamicMessage(asset, state.overview?.events?.[0])
       + (state.pending.question ? `<article class="message user"><div class="user-message">${escapeHtml(state.pending.question)}</div></article>` : "")
-      + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`;
+      + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`
+      + renderThesisDraftBanner();
     bindImportance();
     return;
   }
@@ -320,7 +343,8 @@ function renderConversation() {
     + renderImportanceChart(state.importanceRows, { escapeHtml })
     + renderDynamicMessage(asset, event)
     + olderEvents.map(renderEventPush).join("")
-    + messages.map(renderMessage).join("");
+    + messages.map(renderMessage).join("")
+    + renderThesisDraftBanner();
   bindImportance();
 }
 
@@ -491,6 +515,123 @@ function thesisEditSheet() {
   return `${sheetHeader("维护我的判断", "保存后形成新版本", true)}<div class="sheet-body"><form id="thesis-edit-form" class="sheet-form"><label>核心判断<textarea name="core_thesis" required>${escapeHtml(thesis.core_thesis || "")}</textarea></label><label>重点观察<textarea name="watch_variables">${escapeHtml(thesis.watch_variables || "")}</textarea></label><label>判断失效条件<textarea name="invalid_conditions">${escapeHtml(thesis.invalid_conditions || "")}</textarea></label><div class="button-row"><button class="primary-button pressable" type="submit">保存新版本</button></div></form></div>`;
 }
 
+async function openThesisContext(trigger) {
+  if (!state.assetId) return;
+  try {
+    state.thesisContext = await api(`/assets/${state.assetId}/thesis-draft/context`);
+    openSheet("thesisContext", trigger);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function addImportanceDayToThesis(date, trigger) {
+  if (!state.assetId) return;
+  try {
+    const [context, day] = await Promise.all([
+      api(`/assets/${state.assetId}/thesis-draft/context`),
+      api(`/assets/${state.assetId}/importance/${encodeURIComponent(date)}`),
+    ]);
+    const added = (day.signals || []).flatMap((signal) => signal.evidence_ids || []);
+    context.selected_evidence_ids = [...new Set([
+      ...(context.selected_evidence_ids || []), ...added,
+    ])].slice(0, 30);
+    state.thesisContext = context;
+    openSheet("thesisContext", trigger);
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function selectedThesisScope() {
+  const messageIds = [...els.sheet.querySelectorAll("[data-thesis-message]:checked")]
+    .map((item) => Number(item.value));
+  const evidenceIds = [...els.sheet.querySelectorAll("[data-thesis-evidence]:checked")]
+    .map((item) => item.value);
+  return {
+    messageIds: messageIds.length ? messageIds : (state.thesisDraft?.selected_message_ids || []),
+    evidenceIds: evidenceIds.length ? evidenceIds : (state.thesisDraft?.selected_evidence_ids || []),
+  };
+}
+
+async function generateThesisDraft() {
+  if (!state.assetId || state.thesisDraftPending) return;
+  const scope = selectedThesisScope();
+  state.thesisDraftPending = true;
+  state.abortController = new AbortController();
+  showToast("正在整理判断草稿…");
+  try {
+    await streamPost(`/assets/${state.assetId}/thesis-drafts/generate`, {
+      message_ids: scope.messageIds,
+      evidence_ids: scope.evidenceIds,
+    }, ({ data }) => {
+      if (data.status === "completed") {
+        state.thesisDraft = data.draft;
+        state.thesisAcceptedChanges = {};
+        state.sheetHistory.push({ ...(state.sheetView || { type: "thesisContext" }) });
+        state.sheetView = { type: "thesisReview" };
+        renderSheet();
+      }
+      if (data.status === "failed") throw new Error(data.message || "判断草稿生成失败");
+    }, state.abortController.signal);
+  } catch (error) {
+    if (error.name !== "AbortError") showToast(error.message, "error");
+  } finally {
+    state.thesisDraftPending = false;
+    state.abortController = null;
+  }
+}
+
+function acceptThesisField(button) {
+  const field = button.dataset.acceptThesisField;
+  const textarea = els.sheet.querySelector(`[name="${field}"]`);
+  if (!textarea || !state.thesisDraft) return;
+  textarea.value = suggestionValue(state.thesisDraft, field);
+  const suggestion = state.thesisDraft.ai_suggestion || {};
+  state.thesisAcceptedChanges[field] = field === "core_thesis"
+    ? suggestion.core_thesis?.change_type || "unchanged"
+    : (suggestion[field] || []).map((item) => item.change_type);
+  button.textContent = "已采纳 ✓";
+}
+
+async function saveThesisDraft() {
+  if (!state.assetId || !state.thesisDraft?.id) return;
+  const form = els.sheet.querySelector("#thesis-draft-form");
+  if (!form) return;
+  const content = collectThesisForm(form);
+  content.change_summary = state.thesisAcceptedChanges;
+  content.creation_method = "ai_assisted";
+  const scope = state.thesisDraft;
+  const response = await api(`/assets/${state.assetId}/thesis-drafts/${scope.id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      message_ids: scope.selected_message_ids || [],
+      evidence_ids: scope.selected_evidence_ids || [],
+      user_content: content,
+    }),
+  });
+  state.thesisDraft = { ...scope, ...(response.draft || {}), user_content: content };
+}
+
+async function confirmThesisVersion(form) {
+  const content = collectThesisForm(form);
+  if (!content.core_thesis) {
+    showToast("请先填写核心判断", "error");
+    return;
+  }
+  try {
+    await saveThesisDraft();
+    await api(`/assets/${state.assetId}/thesis-drafts/${state.thesisDraft.id}/confirm`, { method: "POST" });
+    await loadOverview(state.assetId);
+    state.sheetView = { type: "thesisHistory" };
+    state.sheetHistory = [];
+    renderSheet();
+    showToast("已保存新的判断版本", "success");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
 function assetsSheet() {
   const rows = state.assets.length ? state.assets.map((asset) => `
     <div class="managed-asset"><span>${assetAvatar(asset)}</span><span><strong>${escapeHtml(asset.stock_name || asset.stock_code)}</strong><small>${assetKind(asset)} · ${escapeHtml(asset.stock_code)}</small></span><button class="text-button pressable" type="button" data-asset="${asset.id}">查看</button></div>
@@ -519,6 +660,23 @@ function renderSheet() {
   if (view.type === "assets") els.sheet.innerHTML = assetsSheet();
   if (view.type === "add") els.sheet.innerHTML = addAssetSheet();
   if (view.type === "settings") els.sheet.innerHTML = settingsSheet();
+  if (view.type === "thesisContext") {
+    els.sheet.innerHTML = state.thesisContext
+      ? thesisContextSheet(state.thesisContext, { sheetHeader, escapeHtml })
+      : `${sheetHeader("维护我的判断", "正在读取", true)}<div class="sheet-body"><div class="loading-state">正在读取对话与证据…</div></div>`;
+  }
+  if (view.type === "thesisReview") {
+    els.sheet.innerHTML = state.thesisDraft
+      ? thesisReviewSheet({
+        ...state.thesisDraft,
+        user_content: state.thesisDraft.user_content || {},
+        base_version: state.thesisDraft.base_version || state.thesisContext?.base_version || 0,
+      }, { sheetHeader, escapeHtml })
+      : `${sheetHeader("维护我的判断", "正在读取", true)}<div class="sheet-body"><div class="loading-state">正在准备草稿…</div></div>`;
+  }
+  if (view.type === "thesisHistory") {
+    els.sheet.innerHTML = thesisHistorySheet(state.overview?.thesis_history || [], { sheetHeader, escapeHtml });
+  }
   if (view.type === "importanceDay") {
     els.sheet.innerHTML = `${sheetHeader("研究重要性", view.date || "", true)}<div class="sheet-body"><div class="loading-state">正在读取当日评分…</div></div>`;
   }
@@ -580,6 +738,9 @@ async function loadSourceDetail(sourceId) {
 
 function closeSheet() {
   if (!state.sheetView) return;
+  if (state.sheetView.type === "thesisReview") {
+    saveThesisDraft().catch((error) => showToast(error.message, "error"));
+  }
   state.sheetView = null;
   state.sheetHistory = [];
   state.sheetData = null;
@@ -627,28 +788,7 @@ function parseSSEBlock(block) {
 
 async function stream(path, payload, onEvent) {
   state.abortController = new AbortController();
-  const response = await fetch(`${API_ROOT}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify(payload),
-    signal: state.abortController.signal,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `请求失败（${response.status}）`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() || "";
-    blocks.filter(Boolean).forEach((block) => onEvent(parseSSEBlock(block)));
-    if (done) break;
-  }
-  if (buffer.trim()) onEvent(parseSSEBlock(buffer));
+  await streamPost(path, payload, onEvent, state.abortController.signal);
 }
 
 async function runAnalysis() {
@@ -791,6 +931,9 @@ function selectAsset(assetId) {
   state.assetId = id;
   state.selectedEventId = null;
   state.analysis = null;
+  state.thesisContext = null;
+  state.thesisDraft = null;
+  state.thesisAcceptedChanges = {};
   state.overview = null;
   state.popoverOpen = false;
   els.assetPopover.classList.remove("is-open");
@@ -991,6 +1134,18 @@ document.addEventListener("click", (event) => {
   }
   if (event.target.closest("[data-analysis-toggle]")) toggleAnalysis(event.target.closest("[data-analysis-toggle]").dataset.analysisToggle);
   if (event.target.closest("[data-edit-thesis]")) openSheet("editThesis", event.target.closest("[data-edit-thesis]"));
+  if (event.target.closest("[data-build-thesis-draft]")) openThesisContext(event.target.closest("[data-build-thesis-draft]"));
+  if (event.target.closest("[data-generate-thesis-draft]")) generateThesisDraft();
+  if (event.target.closest("[data-accept-thesis-field]")) acceptThesisField(event.target.closest("[data-accept-thesis-field]"));
+  if (event.target.closest("[data-thesis-history]")) {
+    state.sheetHistory.push({ ...(state.sheetView || { type: "thesisReview" }) });
+    state.sheetView = { type: "thesisHistory" };
+    renderSheet();
+  }
+  if (event.target.closest("[data-add-day-to-thesis]")) {
+    const button = event.target.closest("[data-add-day-to-thesis]");
+    addImportanceDayToThesis(button.dataset.addDayToThesis, button);
+  }
   if (event.target.closest("[data-close-sheet]")) closeSheet();
   if (event.target.closest("[data-sheet-back]")) backSheet();
   const importanceDay = event.target.closest("[data-importance-day]");
@@ -1029,7 +1184,17 @@ document.addEventListener("submit", (event) => {
     event.preventDefault();
     saveThesis(event.target);
   }
+  if (event.target.id === "thesis-draft-form") {
+    event.preventDefault();
+    confirmThesisVersion(event.target);
+  }
 });
+
+document.addEventListener("blur", (event) => {
+  if (event.target.closest?.("#thesis-draft-form")) {
+    saveThesisDraft().catch((error) => showToast(error.message, "error"));
+  }
+}, true);
 
 document.addEventListener("keydown", (event) => {
   if (state.tourActive) {
