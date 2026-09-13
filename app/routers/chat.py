@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/api")
 class ChatRequest(BaseModel):
     asset_id: int
     question: str = Field(min_length=1, max_length=2000)
-    event_id: str | None = None
+    event_id: Optional[str] = None
 
 
 @router.get("/evidence/{evidence_id}")

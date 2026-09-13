@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -18,15 +19,15 @@ router = APIRouter(prefix="/api")
 class AssetCreate(BaseModel):
     stock_code: str
     asset_type: str = Field(default="watchlist", pattern="^(watchlist|holding)$")
-    quantity: float | None = None
-    cost_price: float | None = None
+    quantity: Optional[float] = None
+    cost_price: Optional[float] = None
 
 
 class AssetUpdate(BaseModel):
-    asset_type: str | None = Field(default=None, pattern="^(watchlist|holding)$")
-    quantity: float | None = None
-    cost_price: float | None = None
-    notifications_enabled: bool | None = None
+    asset_type: Optional[str] = Field(default=None, pattern="^(watchlist|holding)$")
+    quantity: Optional[float] = None
+    cost_price: Optional[float] = None
+    notifications_enabled: Optional[bool] = None
 
 
 class ThesisCreate(BaseModel):
@@ -154,6 +155,7 @@ def _parse_analyses(rows: list[dict]) -> list[dict]:
 
 def build_overview(asset: dict, use_cache: bool = True) -> dict:
     """组装单标的全量视图：行情、事件、判断、最近分析与对话。"""
+    asset = dict(asset)
     code = asset["stock_code"]
     name = asset["stock_name"]
     errors: dict[str, str] = {}
@@ -161,6 +163,13 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
     snapshot = None
     try:
         snapshot = market_service.snapshot(code, use_cache=use_cache)
+        if snapshot.get("name") and snapshot["name"] != code:
+            asset["stock_name"] = snapshot["name"]
+            db.execute(
+                "UPDATE assets SET stock_name = ?, updated_at = ? WHERE id = ?",
+                (snapshot["name"], db.utcnow(), asset["id"]),
+            )
+            name = snapshot["name"]
     except MarketDataError as exc:
         errors["snapshot"] = str(exc)
 

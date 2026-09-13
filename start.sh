@@ -5,9 +5,9 @@ cd "$(dirname "$0")"
 
 PYTHON_BIN="${PYTHON_BIN:-}"
 if [ -z "$PYTHON_BIN" ]; then
-  for candidate in python3.12 python3.11 python3.10 python3; do
+  for candidate in python3.12 python3.11 python3.10 python3.9 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then
-      if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+      if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'; then
         PYTHON_BIN="$candidate"
         break
       fi
@@ -15,7 +15,7 @@ if [ -z "$PYTHON_BIN" ]; then
   done
 fi
 if [ -z "$PYTHON_BIN" ]; then
-  echo "需要 Python 3.10+，请安装后重试。" >&2
+  echo "需要 Python 3.9+，请安装后重试。" >&2
   exit 1
 fi
 

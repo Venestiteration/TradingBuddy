@@ -1609,7 +1609,7 @@
           <span class="feed-status"><i class="feed-pulse" aria-hidden="true"></i>AI 正在持续检查 ${asset.metrics ? Object.keys(asset.metrics).length : 0} 个关键指标</span>
           <button class="simulate-button pressable" type="button" data-simulate-push>模拟新动态</button>
         </div>
-        <article class="message assistant">
+        <article class="message assistant" data-tour="thesis">
           <div data-tour="dynamic">
             <div class="assistant-kicker"><span class="status-dot ${asset.statusClass}"></span>今日最重要的变化 · 模拟数据</div>
             <h1>${asset.headline}</h1>
@@ -2029,7 +2029,7 @@
         <section class="detail-section"><span class="detail-eyebrow">关注周期</span><p>${asset.thesis.horizon}</p></section>
         <div class="button-row"><button class="primary-button pressable" type="button" data-edit-thesis>编辑我的判断</button></div>
       `;
-      return sheetFrame("我的判断", `${asset.name} · ${asset.thesis.state}。AI 可以协助起草，但只有你能确认或修改。`, body);
+      return sheetFrame("我的判断 · 维护判断", `${asset.name} · ${asset.thesis.state}。AI 可以协助起草，但只有你能确认或修改。`, body);
     }
 
     function impactSheet(asset) {

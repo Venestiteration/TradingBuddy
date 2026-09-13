@@ -166,11 +166,10 @@ class MarketService:
                     return str(item.get("name", code))
         except Exception:
             pass
-        try:
-            snapshot = self.snapshot(code)
-            return snapshot.get("name") or None
-        except Exception:
-            return None
+        # 股票清单不可用时允许直接用代码建立本地资产；后续行情请求
+        # 若成功，会在总览中返回真实名称和行情，避免添加动作被外部
+        # 清单接口阻塞。
+        return None
 
     def stock_name(self, code: str) -> str:
         return self._name_for(code) or code

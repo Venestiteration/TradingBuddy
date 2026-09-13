@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI 投研助手 · 本机 MVP</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body data-api-root="/api">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">⌁</span>
+      <div><strong>AI 投研助手</strong><small>本机 MVP · 证据优先</small></div>
+    </div>
+    <div class="toolbar">
+      <label class="sr-only" for="asset-select">当前标的</label>
+      <select id="asset-select" data-tour="asset" aria-label="当前标的">
+        <option value="">添加一个标的开始</option>
+      </select>
+      <button class="button secondary" id="add-asset-button" type="button">添加标的</button>
+      <button class="button secondary" id="toggle-type-button" type="button" hidden>标记持仓</button>
+      <button class="button icon" id="refresh-button" type="button" aria-label="刷新数据" title="刷新数据">↻</button>
+    </div>
+  </header>
+
+  <div id="global-status" class="status-bar" role="status" aria-live="polite"></div>
+
+  <main class="page-shell">
+    <section id="empty-state" class="empty-state">
+      <div class="eyebrow">LOCAL RESEARCH WORKSPACE</div>
+      <h1>把一个标的的事实、事件和判断放在一起。</h1>
+      <p>输入六位 A 股代码即可开始。行情、新闻和公告来自外部数据源；AI 只基于当前页面已加载的证据进行分析。</p>
+      <button class="button primary" type="button" data-action="open-add">添加第一个标的</button>
+      <p class="muted small">本工具只整理研究信息，不提供买卖、仓位、目标价或交易时点建议。</p>
+    </section>
+
+    <section id="workspace" class="workspace" hidden>
+      <div id="overview-loading" class="loading-card" hidden>正在加载行情与事件…</div>
+
+      <section class="hero-card" aria-labelledby="asset-title">
+        <div>
+          <div class="eyebrow" id="asset-meta">标的</div>
+          <h1 id="asset-title">—</h1>
+          <p id="asset-subtitle" class="muted">等待数据</p>
+        </div>
+        <div id="snapshot" class="snapshot-grid" aria-label="行情摘要"></div>
+      </section>
+
+      <div id="data-notices" class="notice-stack"></div>
+
+      <section class="content-grid">
+        <div class="main-column">
+          <section class="panel" data-tour="dynamic" aria-labelledby="events-title">
+            <div class="panel-heading">
+              <div><div class="eyebrow">DYNAMIC</div><h2 id="events-title">近期动态</h2></div>
+              <span id="events-meta" class="muted small"></span>
+            </div>
+            <div id="events" class="event-list"></div>
+          </section>
+
+          <section class="panel" data-tour="thesis" aria-labelledby="analysis-title">
+            <div class="panel-heading">
+              <div><div class="eyebrow">GROUNDED ANALYSIS</div><h2 id="analysis-title">基于证据的分析</h2></div>
+              <span id="analysis-state" class="status-pill neutral">尚未分析</span>
+            </div>
+            <div id="analysis" class="analysis-empty">选择一条动态后生成分析。切换标的或刷新页面不会自动调用模型。</div>
+            <div id="analysis-actions" class="button-row" hidden>
+              <button id="analyze-button" class="button primary" type="button">生成分析</button>
+              <button id="open-source-button" class="button secondary" type="button">查看证据</button>
+            </div>
+          </section>
+
+          <section class="panel" data-tour="actions" aria-labelledby="chat-title">
+            <div class="panel-heading">
+              <div><div class="eyebrow">FOLLOW-UP</div><h2 id="chat-title">继续追问</h2></div>
+            </div>
+            <div id="messages" class="messages"></div>
+            <form id="chat-form" class="chat-form">
+              <textarea id="chat-input" rows="2" maxlength="2000" placeholder="例如：这条事件触及我原来判断中的哪个假设？"></textarea>
+              <button class="button primary" type="submit">发送问题</button>
+            </form>
+          </section>
+        </div>
+
+        <aside class="side-column">
+          <section class="panel" aria-labelledby="market-title">
+            <div class="panel-heading"><div><div class="eyebrow">MARKET</div><h2 id="market-title">日线与指标</h2></div></div>
+            <div id="chart" class="chart" aria-label="日线价格图"></div>
+            <div id="indicators" class="indicator-list"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="thesis-form-title">
+            <div class="panel-heading"><div><div class="eyebrow">YOUR THESIS</div><h2 id="thesis-form-title">我的判断</h2></div></div>
+            <form id="thesis-form" class="stack-form">
+              <label>核心判断<textarea id="thesis-core" rows="4" maxlength="2000" placeholder="写下你当前确认的判断"></textarea></label>
+              <label>重点观察<textarea id="thesis-watch" rows="3" maxlength="2000" placeholder="哪些变量值得继续跟踪"></textarea></label>
+              <label>失效条件<textarea id="thesis-invalid" rows="3" maxlength="2000" placeholder="什么变化会让判断需要重审"></textarea></label>
+              <button class="button secondary" type="submit">保存新版本</button>
+            </form>
+            <div id="thesis-history" class="history-list"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="sources-title">
+            <div class="panel-heading"><div><div class="eyebrow">SOURCES</div><h2 id="sources-title">来源与证据</h2></div></div>
+            <div id="sources" class="source-list"></div>
+          </section>
+        </aside>
+      </section>
+    </section>
+  </main>
+
+  <div id="add-modal" class="modal-backdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
+      <div class="modal-heading"><div><div class="eyebrow">ADD ASSET</div><h2 id="add-title">添加标的</h2></div><button class="icon close-modal" type="button" aria-label="关闭">×</button></div>
+      <form id="add-form" class="stack-form">
+        <label>股票代码或名称<input id="stock-query" autocomplete="off" placeholder="例如 600519 或 贵州茅台" required></label>
+        <div class="button-row"><button class="button secondary" id="search-button" type="button">搜索</button><button class="button primary" id="direct-add-button" type="submit">直接添加代码</button></div>
+        <div id="search-results" class="search-results"></div>
+      </form>
+      <p class="muted small">搜索依赖股票清单接口；若接口暂不可用，可以直接输入六位代码添加。</p>
+    </section>
+  </div>
+
+  <div id="evidence-modal" class="modal-backdrop" hidden>
+    <section class="modal evidence-modal" role="dialog" aria-modal="true" aria-labelledby="evidence-title">
+      <div class="modal-heading"><div><div class="eyebrow">EVIDENCE</div><h2 id="evidence-title">证据详情</h2></div><button class="icon close-evidence" type="button" aria-label="关闭">×</button></div>
+      <div id="evidence-detail"></div>
+    </section>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

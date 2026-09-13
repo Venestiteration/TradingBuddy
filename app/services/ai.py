@@ -104,25 +104,109 @@ def _client():
     )
 
 
+def _uses_zhipu_chat_api() -> bool:
+    base_url = (settings.openai_base_url or "").lower()
+    return "bigmodel.cn" in base_url or "zhipu" in base_url
+
+
+def _zhipu_extra_body() -> dict[str, Any]:
+    """为不同智谱模型选择可用的思考参数。"""
+    model = (settings.openai_model or "").lower()
+    if model.startswith("glm-5.3"):
+        # glm-5.3 强制思考，不能传 thinking=disabled；降低推理预算，
+        # 给结构化 JSON 正文留出足够的 completion tokens。
+        return {"reasoning_effort": "low"}
+    return {"thinking": {"type": "disabled"}}
+
+
+def _parse_json_response(raw: Any) -> dict:
+    """解析模型 JSON，兼容代码围栏和 JSON 前后的说明文字。"""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        parts = []
+        for item in raw:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or ""))
+            else:
+                parts.append(str(getattr(item, "text", "") or ""))
+        raw = "".join(parts)
+    if not isinstance(raw, str):
+        raise AIError("schema", "模型输出不是合法 JSON")
+
+    text = raw.strip()
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.IGNORECASE | re.DOTALL)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        raise AIError("schema", "模型输出不是合法 JSON")
+
+
 def _call_model(instructions: str, context: dict) -> dict:
-    """调用 Responses API 并解析 JSON。失败抛 AIError。"""
+    """调用 OpenAI 或智谱兼容接口并解析 JSON。失败抛 AIError。"""
     client = _client()
     try:
-        response = client.responses.create(
-            model=settings.openai_model,
-            instructions=instructions,
-            input=json.dumps(context, ensure_ascii=False, default=str),
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "grounded_analysis",
-                    "strict": True,
-                    "schema": ANALYSIS_SCHEMA,
-                }
-            },
-            temperature=0.2,
-            max_output_tokens=2400,
-        )
+        if _uses_zhipu_chat_api():
+            # 智谱兼容 OpenAI 的 Chat Completions，但不提供项目原先调用的
+            # /responses 路径。使用 JSON mode，再由 validate_result 做字段
+            # 和证据引用的二次校验。
+            response = client.chat.completions.create(
+                model=settings.openai_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"{instructions}\n\n请严格返回 JSON，不要输出 Markdown。"
+                            f"JSON 结构如下：{json.dumps(ANALYSIS_SCHEMA, ensure_ascii=False)}"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(context, ensure_ascii=False, default=str),
+                    },
+                ],
+                response_format={"type": "json_object"},
+                extra_body=_zhipu_extra_body(),
+                temperature=0.2,
+                max_tokens=2400,
+            )
+            raw = response.choices[0].message.content
+        else:
+            response = client.responses.create(
+                model=settings.openai_model,
+                instructions=instructions,
+                input=json.dumps(context, ensure_ascii=False, default=str),
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "grounded_analysis",
+                        "strict": True,
+                        "schema": ANALYSIS_SCHEMA,
+                    },
+                },
+                temperature=0.2,
+                max_output_tokens=2400,
+            )
+            raw = getattr(response, "output_text", None)
+            if not raw:
+                # 兼容不同 SDK 版本的输出结构
+                chunks = []
+                for item in getattr(response, "output", []) or []:
+                    for part in getattr(item, "content", []) or []:
+                        if getattr(part, "type", "") in ("output_text", "text"):
+                            chunks.append(getattr(part, "text", ""))
+                raw = "".join(chunks)
     except Exception as exc:
         text = str(exc)
         if "timeout" in text.lower() or isinstance(exc, TimeoutError):
@@ -133,19 +217,7 @@ def _call_model(instructions: str, context: dict) -> dict:
             raise AIError("network", "API Key 无效或未配置") from exc
         raise AIError("network", f"模型调用失败: {text[:200]}") from exc
 
-    raw = getattr(response, "output_text", None)
-    if not raw:
-        # 兼容不同 SDK 版本的输出结构
-        chunks = []
-        for item in getattr(response, "output", []) or []:
-            for part in getattr(item, "content", []) or []:
-                if getattr(part, "type", "") in ("output_text", "text"):
-                    chunks.append(getattr(part, "text", ""))
-        raw = "".join(chunks)
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise AIError("schema", "模型输出不是合法 JSON") from exc
+    return _parse_json_response(raw)
 
 
 def validate_result(result: dict, evidence_lookup: dict[str, dict]) -> tuple[dict, list[str]]:
@@ -333,7 +405,7 @@ def run_grounded_stream(
 
     if result is None:
         category = last_error.category if last_error else "schema"
-        message = last_error.message if last_error else "本次分析未通过证据校验"
+        message = str(last_error) if last_error else "本次分析未通过证据校验"
         yield _sse("failed", {"category": category, "message": message})
         return
 
