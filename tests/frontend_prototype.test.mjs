@@ -495,6 +495,7 @@ test("keyboard final source-tour actions open settings and restore focus to the 
     startSourceTour();
     nextTourStep("Enter");
     assertSettingsOpen();
+    closeSettings();
   } finally {
     await new Promise((resolve) => setTimeout(resolve, 300));
     if (previousDocument === undefined) delete globalThis.document;
