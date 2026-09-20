@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import database as db
 from ..services.importance import CATEGORIES, FACTOR_WEIGHTS, FORMULA_VERSION, daily_scores, decay_score
 from ..services.market import MarketDataError, market_service
+from ..services.public_dynamics import list_public_dynamics
 from ..services.signals import build_evidence_signals, build_market_signals
 from .assets import _asset_row
 
@@ -257,6 +259,10 @@ def recalculate_importance(asset_id: int, days: int = Query(30, ge=1, le=90)) ->
 def daily_importance(asset_id: int, score_date: str) -> dict:
     _asset_row(asset_id)
     row, details = _daily_row(asset_id, score_date)
+    now = datetime.now(timezone.utc)
+    public_count = len(
+        list_public_dynamics(asset_id, now - timedelta(hours=24), now, kind="all")
+    )
     signal_ids = [value for value in details.get("category_signal_ids", {}).values() if value]
     signals = []
     if signal_ids:
@@ -274,6 +280,7 @@ def daily_importance(asset_id: int, score_date: str) -> dict:
             "status": details.get("category_status", {}).get(category, "baseline"),
             "summary": (signal or {}).get("summary") or "暂无新信息",
             "signal_id": (signal or {}).get("id"),
+            "recent_count_24h": public_count if category == "public" else None,
         })
     return {
         "date": row["score_date"], "composite_score": row["composite_score"],
