@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from .. import database as db
 from ..services.ai import run_grounded_stream
 from ..services.evidence import get_evidence, public_evidence
+from ..services.public_dynamics import dynamic_evidence
 from ..services.visitor_ai import VisitorAIConfig, visitor_ai_config
 from .assets import _asset_row, _current_thesis
 from .research import _sse_response
@@ -26,6 +27,7 @@ class ChatRequest(BaseModel):
     asset_id: int
     question: str = Field(min_length=1, max_length=2000)
     event_id: Optional[str] = None
+    dynamic_id: Optional[int] = None
     recent_messages: list[ChatMessage] = Field(default_factory=list, max_length=6)
 
 
@@ -52,7 +54,12 @@ def chat_stream(
     # 证据范围：选中事件的证据 + 该标的最近 48 小时内的本地证据（失败降级时仍可追问）
     evidence_items = []
     selected_event = None
-    if payload.event_id:
+    if payload.dynamic_id is not None:
+        evidence_items = dynamic_evidence(payload.dynamic_id, asset_id=asset["id"])
+        if not evidence_items:
+            raise HTTPException(status_code=404, detail="公开动态不存在或不属于当前标的")
+        selected_event = evidence_items[0]
+    elif payload.event_id:
         selected = get_evidence(payload.event_id)
         if selected and selected["stock_code"] == asset["stock_code"]:
             selected_event = selected

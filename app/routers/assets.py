@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,11 @@ from .. import database as db
 from ..config import settings
 from ..services.events import collect_events
 from ..services.market import MarketDataError, market_service, normalize_code
+from ..services.public_dynamics import (
+    dynamic_evidence,
+    list_public_dynamics,
+    sync_public_dynamics,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -140,6 +146,11 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
     code = asset["stock_code"]
     name = asset["stock_name"]
     errors: dict[str, str] = {}
+    public_sync = None
+    try:
+        public_sync = sync_public_dynamics(asset, force=not use_cache)
+    except Exception as exc:
+        errors["public_dynamics"] = f"公开动态同步失败: {exc.__class__.__name__}"
 
     snapshot = None
     try:
@@ -171,14 +182,63 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
     else:
         errors["events"] = "行情不可用，事件未抓取"
 
+    canonical_events = []
+    now = datetime.now(timezone.utc)
+    try:
+        rows = list_public_dynamics(
+            asset["id"], now - timedelta(days=90), now, kind="all"
+        )
+        for row in rows:
+            evidence_items = dynamic_evidence(row["id"], asset_id=asset["id"])
+            if not evidence_items:
+                continue
+            primary = next(
+                (
+                    item
+                    for item in evidence_items
+                    if item.get("relation") == "primary"
+                ),
+                evidence_items[0],
+            )
+            canonical_events.append(
+                {
+                    "event_id": primary["evidence_id"],
+                    "evidence_id": primary["evidence_id"],
+                    "dynamic_id": row["id"],
+                    "source_count": row.get(
+                        "source_count", row.get("evidence_count", len(evidence_items))
+                    ),
+                    "title": row["canonical_title"],
+                    "excerpt": row["summary"],
+                    "published_at": row["published_at"],
+                    "source_type": row["kind"],
+                    "source_level": primary["source_level"],
+                    "source_url": primary.get("source_url"),
+                    "content_status": row["content_status"],
+                    "publisher": str((primary.get("raw") or {}).get("publisher") or ""),
+                    "priority": row["importance_score"],
+                }
+            )
+    except Exception as exc:
+        errors.setdefault(
+            "public_dynamics", f"公开动态读取失败: {exc.__class__.__name__}"
+        )
+
+    events = canonical_events or [
+        event
+        for event in events_payload.get("events", [])
+        if event.get("source_type") == "market"
+    ]
+
     thesis = _current_thesis(asset["id"])
 
     return {
         "asset": asset,
         "snapshot": snapshot,
         "history": history,
-        "events": events_payload.get("events", []),
+        "events": events,
         "event_errors": events_payload.get("errors", []),
+        "public_sync": public_sync,
         "thesis": thesis,
         "errors": errors,
         "data_time": (history or {}).get("data_time"),
