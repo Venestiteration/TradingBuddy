@@ -23,6 +23,13 @@ CHAT_CONFIG = VisitorAIConfig(
     api_mode="chat",
 )
 
+ZHIPU_FLASH_CONFIG = VisitorAIConfig(
+    api_key="visitor-key",
+    model="glm-4-flash",
+    base_url="https://open.bigmodel.cn/api/paas/v4",
+    resolved_ips=("8.8.8.8",),
+)
+
 
 class FakeChatCompletions:
     def __init__(self):
@@ -115,6 +122,22 @@ class ZhipuCompatibilityTest(unittest.TestCase):
 
             self.assertEqual(result["impact_state"], "insufficient")
             self.assertEqual(fake.chat.completions.kwargs["response_format"], {"type": "json_object"})
+            self.assertNotIn("extra_body", fake.chat.completions.kwargs)
+        finally:
+            ai._client = original_client
+
+    def test_zhipu_standard_model_does_not_receive_reasoning_override(self):
+        original_client = ai._client
+        try:
+            fake = FakeClient()
+            ai._client = lambda config: fake
+
+            ai._call_model(
+                ZHIPU_FLASH_CONFIG,
+                "system instructions",
+                {"stock": {"code": "600519"}},
+            )
+
             self.assertNotIn("extra_body", fake.chat.completions.kwargs)
         finally:
             ai._client = original_client

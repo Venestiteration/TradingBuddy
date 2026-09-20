@@ -143,13 +143,15 @@ def _uses_chat_api(config: VisitorAIConfig) -> bool:
     return config.api_mode == "chat" or _uses_zhipu_chat_api(config)
 
 
-def _zhipu_extra_body(config: VisitorAIConfig) -> dict[str, Any]:
-    """为不同智谱模型选择可用的思考参数。"""
+def _zhipu_extra_body(config: VisitorAIConfig) -> dict[str, Any] | None:
+    """仅为明确支持的智谱推理模型设置思考参数。"""
     if config.model.lower().startswith("glm-5.3"):
         # glm-5.3 强制思考，不能传 thinking=disabled；降低推理预算，
         # 给结构化 JSON 正文留出足够的 completion tokens。
         return {"reasoning_effort": "low"}
-    return {"thinking": {"type": "disabled"}}
+    # 普通模型（例如 glm-4-flash）不强行注入 thinking 参数，避免不同
+    # 模型版本因不支持该扩展字段而直接返回 400。
+    return None
 
 
 def _parse_json_response(raw: Any) -> dict:
@@ -221,7 +223,9 @@ def call_structured_model(
                 "max_tokens": max_tokens,
             }
             if _uses_zhipu_chat_api(config):
-                chat_kwargs["extra_body"] = _zhipu_extra_body(config)
+                extra_body = _zhipu_extra_body(config)
+                if extra_body:
+                    chat_kwargs["extra_body"] = extra_body
             response = client.chat.completions.create(**chat_kwargs)
             raw = response.choices[0].message.content
         else:
