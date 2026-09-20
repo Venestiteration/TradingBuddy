@@ -129,6 +129,70 @@ CREATE TABLE IF NOT EXISTS thesis_drafts (
     confirmed_thesis_id INTEGER REFERENCES theses(id)
 );
 
+CREATE TABLE IF NOT EXISTS public_dynamics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    canonical_key TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('announcement', 'news')),
+    category TEXT NOT NULL,
+    canonical_title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    published_at TEXT NOT NULL,
+    importance_score REAL NOT NULL,
+    importance_factors_json TEXT NOT NULL DEFAULT '{}',
+    formula_version TEXT NOT NULL DEFAULT 'public-dynamics-v1',
+    content_status TEXT NOT NULL DEFAULT 'title_only'
+        CHECK (content_status IN ('title_only', 'excerpt', 'full')),
+    conflict_status TEXT NOT NULL DEFAULT 'none'
+        CHECK (conflict_status IN ('none', 'possible')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (asset_id, canonical_key)
+);
+
+CREATE TABLE IF NOT EXISTS public_dynamic_evidence (
+    dynamic_id INTEGER NOT NULL REFERENCES public_dynamics(id) ON DELETE CASCADE,
+    evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) ON DELETE CASCADE,
+    relation TEXT NOT NULL CHECK (relation IN ('primary', 'corroborating', 'related')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (dynamic_id, evidence_id)
+);
+
+CREATE TABLE IF NOT EXISTS source_sync_state (
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    last_attempt_at TEXT NOT NULL,
+    last_success_at TEXT,
+    last_status TEXT NOT NULL CHECK (last_status IN ('success', 'empty', 'failed')),
+    last_error_code TEXT,
+    last_error_message TEXT,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (asset_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS public_dynamics_sync_state (
+    asset_id INTEGER PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    last_attempt_at TEXT NOT NULL,
+    last_complete_at TEXT,
+    last_status TEXT NOT NULL CHECK (last_status IN ('complete', 'partial', 'failed')),
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS document_cache (
+    evidence_id TEXT PRIMARY KEY REFERENCES evidence(evidence_id) ON DELETE CASCADE,
+    document_url TEXT NOT NULL,
+    document_hash TEXT,
+    mime_type TEXT,
+    byte_size INTEGER,
+    extraction_status TEXT NOT NULL
+        CHECK (extraction_status IN ('pending', 'extracted', 'unsupported', 'failed')),
+    extracted_text TEXT NOT NULL DEFAULT '',
+    extracted_at TEXT,
+    error_message TEXT,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -145,6 +209,12 @@ CREATE INDEX IF NOT EXISTS idx_importance_daily_asset_date
     ON importance_daily(asset_id, score_date);
 CREATE INDEX IF NOT EXISTS idx_thesis_draft_asset_status
     ON thesis_drafts(asset_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_public_dynamics_asset_time
+    ON public_dynamics(asset_id, published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_public_dynamic_evidence_evidence
+    ON public_dynamic_evidence(evidence_id);
+CREATE INDEX IF NOT EXISTS idx_source_sync_state_asset
+    ON source_sync_state(asset_id, provider);
 """
 
 
