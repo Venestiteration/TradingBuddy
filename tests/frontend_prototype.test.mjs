@@ -94,6 +94,7 @@ test("visitor AI settings preserve the current interaction style", () => {
   assert.ok(index.includes("<span>TradingBuddy</span>"));
   assert.ok(index.includes('id="composer-dock"'));
   assert.ok(index.includes('data-tour="settings"'));
+  assert.match(index, /app\.js\?v=20260920-visitor-ai-guard/);
   assert.match(app, /from "\.\/ai-local\.js\?v=20260920-visitor-ai-guard"/);
   assert.ok(app.includes('id="ai-settings-form"'));
   assert.ok(app.includes('data-api-url-preset'));
