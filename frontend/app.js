@@ -808,7 +808,11 @@ function renderSheet() {
   if (view.type === "editThesis") els.sheet.innerHTML = thesisEditSheet();
   if (view.type === "assets") els.sheet.innerHTML = assetsSheet();
   if (view.type === "add") els.sheet.innerHTML = addAssetSheet();
-  if (view.type === "settings") els.sheet.innerHTML = settingsSheet();
+  if (view.type === "settings") {
+    els.sheet.innerHTML = settingsSheet();
+    const providerHint = els.sheet.querySelector(".setting-hint");
+    if (providerHint) providerHint.textContent = "常用服务已预填地址；如果服务器无法直连 OpenAI 官方，请选择 DeepSeek、智谱、通义或自定义可访问地址。";
+  }
   if (view.type === "thesisContext") {
     els.sheet.innerHTML = state.thesisContext
       ? thesisContextSheet(state.thesisContext, { sheetHeader, escapeHtml })
@@ -945,7 +949,7 @@ const AI_ERROR_MESSAGES = {
   auth: "API Key 无效或没有模型权限，请检查本地配置。",
   network: "无法连接模型服务，请检查网络或 API 地址。",
   quota: "模型额度或频率受限，请稍后重试或更换模型。",
-  timeout: "模型响应超时，请稍后重试。",
+  timeout: "模型响应超时；如果选择 OpenAI 官方，当前服务器可能无法直连，请改用 DeepSeek、智谱、通义或自定义可访问地址。",
   schema: "模型返回格式异常，请重试或更换模型。",
 };
 

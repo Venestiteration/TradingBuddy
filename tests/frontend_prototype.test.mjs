@@ -97,6 +97,7 @@ test("visitor AI settings preserve the current interaction style", () => {
   assert.match(index, /app\.js\?v=20260920-visitor-ai-guard/);
   assert.match(app, /from "\.\/api\.js\?v=20260920-visitor-ai-guard"/);
   assert.match(app, /from "\.\/ai-local\.js\?v=20260920-visitor-ai-guard"/);
+  assert.match(app, /服务器无法直连 OpenAI 官方/);
   assert.ok(app.includes('id="ai-settings-form"'));
   assert.ok(app.includes('data-api-url-preset'));
   assert.ok(app.includes('data-api-url-custom'));
