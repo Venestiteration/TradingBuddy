@@ -12,9 +12,12 @@ import {
   AI_TOUR_KEY,
   SOURCE_TOUR_KEY,
   aiHeaders,
+  applyIfCurrentView,
   boundRecentMessages,
+  captureView,
   clearAIData,
   disableAI,
+  isCurrentView,
   loadAIConfig,
   loadAssetAI,
   saveAIConfig,
@@ -27,6 +30,7 @@ const $ = (selector) => document.querySelector(selector);
 const state = {
   assets: [],
   assetId: null,
+  viewGeneration: 0,
   overview: null,
   selectedEventId: null,
   analysis: null,
@@ -576,14 +580,17 @@ function selectedThesisScope() {
 async function generateThesisDraft() {
   if (!state.assetId || state.thesisDraftPending) return;
   const scope = selectedThesisScope();
+  const assetId = state.assetId;
+  const view = captureView(state);
   state.thesisDraftPending = true;
   state.abortController = new AbortController();
   showToast("正在整理判断草稿…");
   try {
-    await streamPost(`/assets/${state.assetId}/thesis-drafts/generate`, {
+    await streamPost(`/assets/${assetId}/thesis-drafts/generate`, {
       message_ids: scope.messageIds,
       evidence_ids: scope.evidenceIds,
     }, ({ data }) => {
+      if (!isCurrentView(state, view)) return;
       if (data.status === "completed") {
         state.thesisDraft = data.draft;
         state.thesisAcceptedChanges = {};
@@ -594,10 +601,12 @@ async function generateThesisDraft() {
       if (data.status === "failed") throw new Error(data.message || "判断草稿生成失败");
     }, state.abortController.signal, aiHeaders(state.aiConfig));
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.message, "error");
+    if (isCurrentView(state, view) && error.name !== "AbortError") showToast(error.message, "error");
   } finally {
-    state.thesisDraftPending = false;
-    state.abortController = null;
+    applyIfCurrentView(state, view, () => {
+      state.thesisDraftPending = false;
+      state.abortController = null;
+    });
   }
 }
 
@@ -840,36 +849,48 @@ async function stream(path, payload, onEvent) {
 
 async function runAnalysis() {
   if (!state.assetId || !state.selectedEventId || state.busy) return;
+  const assetId = state.assetId;
+  const view = captureView(state);
   state.pending = { type: "research" };
   setGenerating(true);
   renderConversation();
   try {
     let completed = null;
-    await stream("/research/stream", { asset_id: state.assetId, event_id: state.selectedEventId }, ({ event, data }) => {
+    await stream("/research/stream", { asset_id: assetId, event_id: state.selectedEventId }, ({ event, data }) => {
       if (event === "completed") {
-        saveAnalysis(state.assetId, data);
-        completed = data;
-        state.analysis = data.result;
+        applyIfCurrentView(state, view, () => {
+          saveAnalysis(assetId, data);
+          completed = data;
+          state.analysis = data.result;
+        });
       }
-      if (event === "failed") showToast(aiErrorMessage(data), "error");
+      if (event === "failed" && isCurrentView(state, view)) showToast(aiErrorMessage(data), "error");
     });
     if (completed) {
-      loadLocalAIState();
-      state.analysis = completed.result;
-      showToast("分析完成", "success");
+      applyIfCurrentView(state, view, () => {
+        loadLocalAIState();
+        state.analysis = completed.result;
+        showToast("分析完成", "success");
+      });
     }
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
+    if (isCurrentView(state, view) && error.name !== "AbortError") {
+      showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
+    }
   } finally {
-    state.pending = null;
-    state.abortController = null;
-    setGenerating(false);
-    renderConversation();
+    applyIfCurrentView(state, view, () => {
+      state.pending = null;
+      state.abortController = null;
+      setGenerating(false);
+      renderConversation();
+    });
   }
 }
 
 async function runChat(question) {
   if (!state.assetId || state.busy || !question.trim()) return;
+  const assetId = state.assetId;
+  const view = captureView(state);
   state.pending = { type: "chat", question };
   setGenerating(true);
   renderConversation();
@@ -878,62 +899,93 @@ async function runChat(question) {
   try {
     let completedResult = null;
     await stream("/chat/stream", {
-      asset_id: state.assetId,
+      asset_id: assetId,
       event_id: state.selectedEventId,
       question,
       recent_messages: recentMessages,
     }, ({ event, data }) => {
       if (event === "completed") {
-        saveConversationTurn(state.assetId, question, data);
-        completedResult = data;
-        state.analysis = data.result;
+        applyIfCurrentView(state, view, () => {
+          saveConversationTurn(assetId, question, data);
+          completedResult = data;
+          state.analysis = data.result;
+        });
       }
-      if (event === "failed") showToast(aiErrorMessage(data), "error");
+      if (event === "failed" && isCurrentView(state, view)) showToast(aiErrorMessage(data), "error");
     });
     if (completedResult) {
-      loadLocalAIState();
-      state.analysis = completedResult.result;
-      showToast("回答完成", "success");
+      applyIfCurrentView(state, view, () => {
+        loadLocalAIState();
+        state.analysis = completedResult.result;
+        showToast("回答完成", "success");
+      });
     }
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
+    if (isCurrentView(state, view) && error.name !== "AbortError") {
+      showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
+    }
   } finally {
-    state.pending = null;
-    state.abortController = null;
-    setGenerating(false);
-    renderConversation();
-    requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
+    applyIfCurrentView(state, view, () => {
+      state.pending = null;
+      state.abortController = null;
+      setGenerating(false);
+      renderConversation();
+      requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
+    });
   }
 }
 
 async function loadAssets(preferredId = null) {
   const body = await api("/assets");
   state.assets = body.assets || [];
-  state.assetId = preferredId || state.assetId || state.assets[0]?.id || null;
+  const nextAssetId = preferredId || state.assetId || state.assets[0]?.id || null;
+  if (nextAssetId !== state.assetId) {
+    if (state.busy) abortGeneration();
+    else if (state.abortController) state.abortController.abort();
+    state.abortController = null;
+    state.viewGeneration += 1;
+    state.assetId = nextAssetId;
+    state.selectedEventId = null;
+    state.analysis = null;
+    state.overview = null;
+    state.thesisContext = null;
+    state.thesisDraft = null;
+    state.thesisDraftPending = false;
+    loadLocalAIState();
+  }
   renderAssetPopover();
   if (state.assetId) await loadOverview(state.assetId);
   else renderConversation();
 }
 
 async function loadOverview(assetId) {
-  state.assetId = Number(assetId);
+  const requestAssetId = Number(assetId);
+  const view = { assetId: requestAssetId, generation: state.viewGeneration };
+  if (!isCurrentView(state, view)) return;
+  state.assetId = requestAssetId;
   state.overview = null;
   renderLoading();
   try {
-    const overview = await api(`/assets/${state.assetId}/overview`);
-    const theses = await api(`/assets/${state.assetId}/theses`).catch(() => ({ history: [] }));
-    const importance = await api(`/assets/${state.assetId}/importance?days=${state.importanceDays}`)
+    const overview = await api(`/assets/${requestAssetId}/overview`);
+    if (!isCurrentView(state, view)) return;
+    const theses = await api(`/assets/${requestAssetId}/theses`).catch(() => ({ history: [] }));
+    if (!isCurrentView(state, view)) return;
+    const importance = await api(`/assets/${requestAssetId}/importance?days=${state.importanceDays}`)
       .catch((error) => ({ rows: [], error: error.message }));
-    overview.thesis_history = theses.history || [];
-    state.overview = overview;
-    state.importanceRows = importance.rows || [];
-    state.importanceError = importance.error || "";
-    if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
-    loadLocalAIState();
-    renderConversation();
+    if (!applyIfCurrentView(state, view, () => {
+      overview.thesis_history = theses.history || [];
+      state.overview = overview;
+      state.importanceRows = importance.rows || [];
+      state.importanceError = importance.error || "";
+      if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
+      loadLocalAIState();
+      renderConversation();
+    })) return;
   } catch (error) {
-    state.overview = { asset: selectedAsset(), events: [] };
-    els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
+    applyIfCurrentView(state, view, () => {
+      state.overview = { asset: selectedAsset(), events: [] };
+      els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
+    });
   }
 }
 

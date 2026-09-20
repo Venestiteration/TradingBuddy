@@ -84,15 +84,15 @@ test("conversation conclusions require user confirmation before versioning", () 
 test("AI requests use visitor headers and local results", () => {
   assert.ok(apiModule.includes("headers = {}"));
   assert.ok(app.includes("aiHeaders(state.aiConfig)"));
-  assert.ok(app.includes("saveAnalysis(state.assetId"));
-  assert.ok(app.includes("saveConversationTurn(state.assetId"));
+  assert.ok(app.includes("saveAnalysis(assetId"));
+  assert.ok(app.includes("saveConversationTurn(assetId"));
   assert.ok(app.includes("recent_messages"));
   assert.ok(aiLocal.includes("AI_WORKSPACE_KEY"));
 });
 
 test("AI SSE failures do not announce a successful response", () => {
-  assert.match(app, /if \(completed\) \{\s*loadLocalAIState\(\);\s*state\.analysis = completed\.result;/);
-  assert.match(app, /if \(completedResult\) \{\s*loadLocalAIState\(\);\s*state\.analysis = completedResult\.result;/);
+  assert.match(app, /if \(completed\) \{\s*applyIfCurrentView\(state, view, \(\) => \{\s*loadLocalAIState\(\);/);
+  assert.match(app, /if \(completedResult\) \{\s*applyIfCurrentView\(state, view, \(\) => \{\s*loadLocalAIState\(\);/);
 });
 
 test("streamPost sends visitor headers and exposes structured errors", async () => {
@@ -156,4 +156,9 @@ test("asset switches refresh local AI context before loading overview", () => {
   const draftEnd = app.indexOf("\nfunction ", draftStart + 1);
   const draftBlock = app.slice(draftStart, draftEnd);
   assert.ok(draftBlock.includes("state.abortController.signal, aiHeaders(state.aiConfig)"));
+});
+
+test("AI and overview work use the view generation guard", () => {
+  assert.ok(app.includes("viewGeneration"));
+  assert.ok(app.includes("applyIfCurrentView"));
 });

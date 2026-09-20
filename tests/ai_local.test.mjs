@@ -84,6 +84,33 @@ test("recent local messages are limited to six and 2000 characters", async () =>
   assert.ok(bounded.every((message) => message.content.length <= 2000));
 });
 
+test("view guard ignores out-of-order overview responses", async () => {
+  const { applyIfCurrentView, captureView } = await import("../frontend/ai-local.js");
+  assert.equal(typeof applyIfCurrentView, "function");
+  const state = { assetId: 1, viewGeneration: 1 };
+  const oldView = captureView(state);
+  state.assetId = 2;
+  state.viewGeneration += 1;
+  let applied = false;
+
+  assert.equal(applyIfCurrentView(state, oldView, () => { applied = true; }), false);
+  assert.equal(applied, false);
+});
+
+test("view guard ignores stale AI completions", async () => {
+  const { applyIfCurrentView, captureView } = await import("../frontend/ai-local.js");
+  const state = { assetId: 7, viewGeneration: 3 };
+  const oldView = captureView(state);
+  state.viewGeneration += 1;
+  let saved = false;
+
+  assert.equal(applyIfCurrentView(state, oldView, () => { saved = true; }), false);
+  assert.equal(saved, false);
+  const currentView = captureView(state);
+  assert.equal(applyIfCurrentView(state, currentView, () => { saved = true; }), true);
+  assert.equal(saved, true);
+});
+
 test("null workspace assets fall back to an empty workspace", () => {
   const storage = new MemoryStorage();
   storage.setItem(AI_WORKSPACE_KEY, JSON.stringify({ assets: null }));

@@ -119,6 +119,20 @@ export function boundRecentMessages(messages) {
   });
 }
 
+export function captureView(state) {
+  return { assetId: state.assetId, generation: state.viewGeneration };
+}
+
+export function isCurrentView(state, view) {
+  return state.assetId === view.assetId && state.viewGeneration === view.generation;
+}
+
+export function applyIfCurrentView(state, view, apply) {
+  if (!isCurrentView(state, view)) return false;
+  apply();
+  return true;
+}
+
 function updateAsset(assetId, update, storage) {
   const target = storage || browserStorage();
   const workspace = loadWorkspace(target);
