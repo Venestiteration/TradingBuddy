@@ -124,6 +124,15 @@ def _client(config: VisitorAIConfig):
     )
 
 
+def _close_client(client: Any) -> None:
+    try:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    except Exception:
+        pass
+
+
 def _uses_zhipu_chat_api(config: VisitorAIConfig) -> bool:
     value = config.base_url.lower()
     return "bigmodel.cn" in value or "zhipu" in value
@@ -243,6 +252,8 @@ def call_structured_model(
         if "api key" in lowered or "401" in text or "403" in text:
             raise AIError("auth", "API Key 无效或没有模型权限") from exc
         raise AIError("network", f"模型调用失败: {text[:200]}") from exc
+    finally:
+        _close_client(client)
 
     return _parse_json_response(raw)
 

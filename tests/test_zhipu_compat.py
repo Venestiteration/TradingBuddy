@@ -36,6 +36,13 @@ class FakeChatCompletions:
 class FakeClient:
     def __init__(self):
         self.chat = SimpleNamespace(completions=FakeChatCompletions())
+        self.closed = False
+        self.close_error = None
+
+    def close(self):
+        self.closed = True
+        if self.close_error:
+            raise self.close_error
 
 
 class ZhipuCompatibilityTest(unittest.TestCase):
@@ -117,6 +124,45 @@ class ZhipuCompatibilityTest(unittest.TestCase):
             self.assertEqual(result, {"summary": "已整理"})
         finally:
             ai._client = original_client
+
+    def test_model_client_is_closed_after_success(self):
+        original_client = ai._client
+        fake = FakeClient()
+        try:
+            ai._client = lambda config: fake
+
+            ai._call_model(
+                ZHIPU_CONFIG,
+                "system instructions",
+                {"stock": {"code": "600519"}},
+            )
+        finally:
+            ai._client = original_client
+
+        self.assertTrue(fake.closed)
+
+    def test_model_client_close_does_not_mask_model_error(self):
+        original_client = ai._client
+        fake = FakeClient()
+
+        def raise_model_error(**kwargs):
+            raise RuntimeError("model boom")
+
+        fake.chat.completions.create = raise_model_error
+        fake.close_error = RuntimeError("close boom")
+        try:
+            ai._client = lambda config: fake
+
+            with self.assertRaisesRegex(ai.AIError, "模型调用失败: model boom"):
+                ai._call_model(
+                    ZHIPU_CONFIG,
+                    "system instructions",
+                    {"stock": {"code": "600519"}},
+                )
+        finally:
+            ai._client = original_client
+
+        self.assertTrue(fake.closed)
 
     def test_request_is_pinned_to_validated_ip_with_original_authority(self):
         request = httpx.Request(
