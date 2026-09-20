@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -12,6 +13,8 @@ from .public_dynamics_types import (
     ProviderResult,
     RawDynamic,
 )
+
+CNINFO_BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class SourceAdapter(Protocol):
@@ -97,6 +100,7 @@ class CninfoAnnouncementAdapter:
                         int(row["announcementTime"]) / 1000,
                         tz=timezone.utc,
                     )
+                    business_timestamp = timestamp.astimezone(CNINFO_BUSINESS_TZ)
                     adjunct = _string(row.get("adjunctUrl")).lstrip("/")
                     announcement_id = _string(row.get("announcementId"))
                     items.append(
@@ -113,7 +117,8 @@ class CninfoAnnouncementAdapter:
                             source_url=(
                                 "https://www.cninfo.com.cn/new/disclosure/detail?"
                                 f"stockCode={stock_code}&announcementId={announcement_id}"
-                                f"&orgId={org_id}&announcementTime={timestamp:%Y-%m-%d}"
+                                f"&orgId={org_id}"
+                                f"&announcementTime={business_timestamp:%Y-%m-%d}"
                             ),
                             document_url=(
                                 f"https://static.cninfo.com.cn/{adjunct}"

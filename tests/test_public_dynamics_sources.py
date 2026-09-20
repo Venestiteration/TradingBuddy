@@ -83,6 +83,11 @@ class FakeAk:
         return pd.DataFrame(self.news)
 
 
+class FailingAk(FakeAk):
+    def stock_news_em(self, **kwargs):
+        raise ConnectionError("eastmoney unavailable")
+
+
 class PublicDynamicsSourcesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -108,6 +113,7 @@ class PublicDynamicsSourcesTest(unittest.TestCase):
         self.assertEqual(client.post_calls[0][1]["data"]["column"], "sse")
         self.assertEqual(client.post_calls[0][1]["data"]["stock"], "600519,gssh0600519")
         self.assertEqual(item.published_at, "2026-09-14T16:41:00+00:00")
+        self.assertIn("announcementTime=2026-09-15", item.source_url)
 
     def test_eastmoney_adapters_preserve_category_and_original_publisher(self):
         fake = FakeAk(self.notices, self.news)
@@ -121,6 +127,15 @@ class PublicDynamicsSourcesTest(unittest.TestCase):
         self.assertEqual(news.items[0].publisher, "证券时报")
         self.assertEqual(news.items[0].kind, "news")
         self.assertEqual(news.items[0].published_at, "2026-09-15T07:58:00+00:00")
+
+    def test_eastmoney_news_error_returns_failed_provider_result(self):
+        result = EastmoneyNewsAdapter(FailingAk(self.notices, self.news)).fetch(
+            "600519", self.start, self.end, "attempted-at"
+        )
+
+        self._assert_failed_result(
+            result, "eastmoney_news", "ConnectionError", "attempted-at"
+        )
 
     def test_cninfo_fetches_all_pages_with_exchange_specific_parameters(self):
         second_page = {**self.cninfo, "totalAnnouncement": 31}
