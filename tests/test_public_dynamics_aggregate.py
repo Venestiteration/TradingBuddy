@@ -1,0 +1,79 @@
+import unittest
+
+from app.services.public_dynamics_aggregate import (
+    aggregate_raw_dynamics,
+    classify_announcement,
+    evidence_identity,
+    normalize_title,
+)
+from app.services.public_dynamics_types import RawDynamic
+
+
+def item(provider, item_id, title, published, kind="announcement", excerpt=""):
+    return RawDynamic(
+        provider=provider,
+        provider_item_id=item_id,
+        stock_code="600519",
+        kind=kind,
+        category="风险提示" if kind == "announcement" else "媒体报道",
+        title=title,
+        excerpt=excerpt,
+        published_at=published,
+        publisher="巨潮资讯网" if provider == "cninfo" else "证券时报",
+        source_url=f"https://example.test/{item_id}",
+        source_level="primary" if provider == "cninfo" else "secondary",
+        content_status="excerpt" if excerpt else "title_only",
+    )
+
+
+class PublicDynamicsAggregateTest(unittest.TestCase):
+    def test_normalize_title_removes_punctuation_and_case(self):
+        self.assertEqual(normalize_title("关于 监管-函：ABC 12！"), "关于监管函abc12")
+
+    def test_classify_announcement_uses_title_or_source_category(self):
+        self.assertEqual(
+            classify_announcement("关于收到监管工作函的公告", "其他"),
+            "监管问询、处罚与风险提示",
+        )
+        self.assertEqual(
+            classify_announcement("关于某事项的公告", "股东变动"),
+            "分红、回购及股东变动",
+        )
+
+    def test_evidence_identity_is_stable_and_source_specific(self):
+        first = item("cninfo", "1", "公告", "2026-09-15T08:00:00+08:00")
+        same = item("cninfo", "1", "另一标题", "2026-09-15T08:05:00+08:00")
+        other = item("cninfo", "2", "公告", "2026-09-15T08:00:00+08:00")
+        self.assertEqual(evidence_identity(first), evidence_identity(same))
+        self.assertNotEqual(evidence_identity(first), evidence_identity(other))
+
+    def test_same_announcement_across_sources_merges_and_preserves_members(self):
+        rows = [
+            item("cninfo", "1", "关于收到监管工作函的公告", "2026-09-15T08:41:00+08:00"),
+            item("eastmoney_notices", "2", "关于收到监管工作函的公告", "2026-09-15T00:00:00+08:00"),
+        ]
+        clusters = aggregate_raw_dynamics(rows)
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(len(clusters[0].members), 2)
+        self.assertEqual(clusters[0].category, "监管问询、处罚与风险提示")
+
+    def test_different_numbers_do_not_merge(self):
+        rows = [
+            item("eastmoney_news", "1", "公司签订10亿元合同", "2026-09-15T08:00:00+08:00", "news"),
+            item("eastmoney_news", "2", "公司签订12亿元合同", "2026-09-15T08:05:00+08:00", "news"),
+        ]
+        self.assertEqual(len(aggregate_raw_dynamics(rows)), 2)
+
+    def test_low_importance_items_are_returned_with_explainable_scores(self):
+        rows = [item("cninfo", "1", "董事会会议决议公告", "2026-09-15T08:00:00+08:00")]
+        cluster = aggregate_raw_dynamics(rows)[0]
+        self.assertGreaterEqual(cluster.importance_score, 0)
+        self.assertLessEqual(cluster.importance_score, 100)
+        self.assertEqual(
+            cluster.importance_factors,
+            {"authority": 95.0, "materiality": 75.0, "relevance": 100.0, "completeness": 45.0},
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
