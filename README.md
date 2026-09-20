@@ -27,15 +27,20 @@
 ./start.sh
 ```
 
-打开 <http://127.0.0.1:8000>。行情和事件可在未配置模型时使用；AI 分析需要在 `.env` 配置模型后重启服务：
+打开 <http://127.0.0.1:8000>。行情和事件可在未配置模型时使用。
 
-```env
-OPENAI_API_KEY=<your-api-key>
-OPENAI_MODEL=glm-5.3
-OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
-```
+## AI 分析配置
 
-`OPENAI_BASE_URL` 留空时使用 OpenAI；填写智谱地址时，服务会自动使用其 Chat Completions 兼容接口。
+AI 分析默认关闭。行情、重要性时间线、公告、新闻和来源查看不需要模型。
+
+如需启用 AI：
+
+1. 打开页面右上角“设置”；
+2. 打开“AI 分析”；
+3. 填写自己的 API Key 和模型名称；
+4. 使用兼容服务时填写 HTTPS API 地址，留空则使用 OpenAI 官方接口。
+
+API Key、分析和对话仅保存在当前浏览器。服务器只在单次请求中使用配置，不写入 `.env`、日志或 SQLite。清除浏览器站点数据会同时清除这些配置和结果。
 
 ## 下一阶段 MVP 能力
 
