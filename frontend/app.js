@@ -8,6 +8,18 @@ import {
   thesisHistorySheet,
   thesisReviewSheet,
 } from "./thesis-workflow.js";
+import {
+  AI_TOUR_KEY,
+  SOURCE_TOUR_KEY,
+  aiHeaders,
+  clearAIData,
+  disableAI,
+  loadAIConfig,
+  loadAssetAI,
+  saveAIConfig,
+  saveAnalysis,
+  saveConversationTurn,
+} from "./ai-local.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -39,6 +51,12 @@ const state = {
   tourReturnFocus: null,
   tourCloseTimer: null,
   toastTimer: null,
+  aiConfig: loadAIConfig(),
+  localMessages: [],
+  localAnalyses: [],
+  aiSettingsExpanded: false,
+  tourKind: "sources",
+  tourSteps: [],
 };
 
 const els = {
@@ -306,7 +324,7 @@ function renderDynamicMessage(asset, event) {
 
 function renderThesisDraftBanner() {
   const thesisDate = state.overview?.thesis?.created_at || "";
-  const eligible = (state.overview?.messages || []).filter(
+  const eligible = state.localMessages.filter(
     (message) => message.role === "assistant" && (!thesisDate || message.created_at > thesisDate),
   );
   if (!eligible.length) return "";
@@ -338,7 +356,7 @@ function renderConversation() {
   const event = events.find((item) => item.event_id === state.selectedEventId) || events[0] || null;
   if (event) state.selectedEventId = event.event_id;
   const olderEvents = event ? events.filter((item) => item.event_id !== event.event_id).slice(0, 8) : [];
-  const messages = state.overview?.messages || [];
+  const messages = state.localMessages;
   els.conversation.innerHTML = renderContextLine(asset, event)
     + renderImportanceChart(state.importanceRows, { escapeHtml })
     + renderDynamicMessage(asset, event)
@@ -791,25 +809,56 @@ function parseSSEBlock(block) {
   try { return { event, data: JSON.parse(data || "{}") }; } catch { return { event, data: { message: data } }; }
 }
 
+const AI_ERROR_MESSAGES = {
+  not_configured: "请先配置并启用 AI 分析。",
+  auth: "API Key 无效或没有模型权限，请检查本地配置。",
+  network: "无法连接模型服务，请检查网络或 API 地址。",
+  quota: "模型额度或频率受限，请稍后重试或更换模型。",
+  timeout: "模型响应超时，请稍后重试。",
+  schema: "模型返回格式异常，请重试或更换模型。",
+};
+
+function aiErrorMessage(data) {
+  return AI_ERROR_MESSAGES[data?.category] || data?.message || "AI 服务暂时不可用，请稍后重试。";
+}
+
+function loadLocalAIState() {
+  const workspace = state.assetId ? loadAssetAI(state.assetId) : { messages: [], analyses: [] };
+  state.localMessages = workspace.messages;
+  state.localAnalyses = workspace.analyses;
+  const latest = [...workspace.analyses].reverse().find(
+    (item) => !state.selectedEventId || item.event_id === state.selectedEventId,
+  );
+  state.analysis = latest?.result || null;
+}
+
 async function stream(path, payload, onEvent) {
   state.abortController = new AbortController();
-  await streamPost(path, payload, onEvent, state.abortController.signal);
+  await streamPost(path, payload, onEvent, state.abortController.signal, aiHeaders(state.aiConfig));
 }
 
 async function runAnalysis() {
   if (!state.assetId || !state.selectedEventId || state.busy) return;
-  const question = "请分析当前事件对我的研究判断有什么意义。";
   state.pending = { type: "research" };
   setGenerating(true);
   renderConversation();
   try {
+    let completed = null;
     await stream("/research/stream", { asset_id: state.assetId, event_id: state.selectedEventId }, ({ event, data }) => {
-      if (event === "failed") showToast(data.message || "分析失败；原始来源仍可查看。", "error");
+      if (event === "completed") {
+        saveAnalysis(state.assetId, data);
+        completed = data;
+        state.analysis = data.result;
+      }
+      if (event === "failed") showToast(aiErrorMessage(data), "error");
     });
-    await loadOverview(state.assetId);
-    showToast("分析完成", "success");
+    if (completed) {
+      loadLocalAIState();
+      state.analysis = completed.result;
+      showToast("分析完成", "success");
+    }
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.message, "error");
+    if (error.name !== "AbortError") showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
   } finally {
     state.pending = null;
     state.abortController = null;
@@ -824,14 +873,40 @@ async function runChat(question) {
   setGenerating(true);
   renderConversation();
   requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
+  const recentMessages = state.localMessages.slice(-6).map(({ role, content }) => {
+    let bounded = String(content || "");
+    if (role === "assistant") {
+      try {
+        const parsed = JSON.parse(bounded);
+        bounded = parsed.result?.conclusion || parsed.conclusion || bounded;
+      } catch {
+        // Older local entries may already be plain text.
+      }
+    }
+    return { role, content: bounded.slice(0, 2000) };
+  });
   try {
-    await stream("/chat/stream", { asset_id: state.assetId, event_id: state.selectedEventId, question }, ({ event, data }) => {
-      if (event === "failed") showToast(data.message || "回答失败；没有生成替代结论。", "error");
+    let completedResult = null;
+    await stream("/chat/stream", {
+      asset_id: state.assetId,
+      event_id: state.selectedEventId,
+      question,
+      recent_messages: recentMessages,
+    }, ({ event, data }) => {
+      if (event === "completed") {
+        saveConversationTurn(state.assetId, question, data);
+        completedResult = data;
+        state.analysis = data.result;
+      }
+      if (event === "failed") showToast(aiErrorMessage(data), "error");
     });
-    await loadOverview(state.assetId);
-    showToast("回答完成", "success");
+    if (completedResult) {
+      loadLocalAIState();
+      state.analysis = completedResult.result;
+      showToast("回答完成", "success");
+    }
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.message, "error");
+    if (error.name !== "AbortError") showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
   } finally {
     state.pending = null;
     state.abortController = null;
@@ -863,8 +938,8 @@ async function loadOverview(assetId) {
     state.overview = overview;
     state.importanceRows = importance.rows || [];
     state.importanceError = importance.error || "";
-    state.analysis = overview.latest_analysis?.result || null;
     if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
+    loadLocalAIState();
     renderConversation();
   } catch (error) {
     state.overview = { asset: selectedAsset(), events: [] };
@@ -1168,6 +1243,7 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-action='select-event']")) {
     state.selectedEventId = event.target.closest("[data-action='select-event']").dataset.eventId;
     state.readEvents.add(state.selectedEventId);
+    loadLocalAIState();
     renderConversation();
   }
   if (event.target.closest("[data-action='refresh']")) refreshData();

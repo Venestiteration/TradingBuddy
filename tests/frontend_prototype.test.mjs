@@ -9,6 +9,7 @@ const index = readFileSync(path.join(root, "frontend/index.html"), "utf8");
 const styles = readFileSync(path.join(root, "frontend/styles.css"), "utf8");
 const app = readFileSync(path.join(root, "frontend/app.js"), "utf8");
 const apiModule = readFileSync(path.join(root, "frontend/api.js"), "utf8");
+const aiLocal = readFileSync(path.join(root, "frontend/ai-local.js"), "utf8");
 const importanceChart = readFileSync(path.join(root, "frontend/importance-chart.js"), "utf8");
 const importanceDetail = readFileSync(path.join(root, "frontend/importance-detail.js"), "utf8");
 const thesisWorkflow = readFileSync(path.join(root, "frontend/thesis-workflow.js"), "utf8");
@@ -78,4 +79,18 @@ test("conversation conclusions require user confirmation before versioning", () 
   assert.ok(thesisWorkflow.includes("data-confirm-thesis-version"));
   assert.ok(thesisWorkflow.includes("历史记录"));
   assert.ok(styles.includes(".thesis-draft-banner"));
+});
+
+test("AI requests use visitor headers and local results", () => {
+  assert.ok(apiModule.includes("headers = {}"));
+  assert.ok(app.includes("aiHeaders(state.aiConfig)"));
+  assert.ok(app.includes("saveAnalysis(state.assetId"));
+  assert.ok(app.includes("saveConversationTurn(state.assetId"));
+  assert.ok(app.includes("recent_messages"));
+  assert.ok(aiLocal.includes("AI_WORKSPACE_KEY"));
+});
+
+test("AI SSE failures do not announce a successful response", () => {
+  assert.match(app, /if \(completed\) \{\s*loadLocalAIState\(\);\s*state\.analysis = completed\.result;/);
+  assert.match(app, /if \(completedResult\) \{\s*loadLocalAIState\(\);\s*state\.analysis = completedResult\.result;/);
 });
