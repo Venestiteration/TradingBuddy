@@ -64,6 +64,26 @@ test("workspace is isolated by asset and capped", () => {
   assert.equal(loadAssetAI(2, storage).messages.length, 2);
 });
 
+test("recent local messages are limited to six and 2000 characters", async () => {
+  const { boundRecentMessages } = await import("../frontend/ai-local.js");
+  assert.equal(typeof boundRecentMessages, "function");
+  const messages = Array.from({ length: 7 }, (_, index) => ({
+    role: "user",
+    content: `q-${index}`,
+  }));
+  messages.push({
+    role: "assistant",
+    content: JSON.stringify({ result: { conclusion: "x".repeat(2400) } }),
+  });
+
+  const bounded = boundRecentMessages(messages);
+
+  assert.equal(bounded.length, 6);
+  assert.equal(bounded[0].content, "q-2");
+  assert.equal(bounded.at(-1).content, "x".repeat(2000));
+  assert.ok(bounded.every((message) => message.content.length <= 2000));
+});
+
 test("null workspace assets fall back to an empty workspace", () => {
   const storage = new MemoryStorage();
   storage.setItem(AI_WORKSPACE_KEY, JSON.stringify({ assets: null }));

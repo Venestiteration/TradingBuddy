@@ -104,6 +104,21 @@ export function loadAssetAI(assetId, storage = null) {
   };
 }
 
+export function boundRecentMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).slice(-6).map(({ role, content }) => {
+    let bounded = String(content || "");
+    if (role === "assistant") {
+      try {
+        const parsed = JSON.parse(bounded);
+        bounded = parsed.result?.conclusion || parsed.conclusion || bounded;
+      } catch {
+        // Older local entries may already be plain text.
+      }
+    }
+    return { role, content: bounded.slice(0, 2000) };
+  });
+}
+
 function updateAsset(assetId, update, storage) {
   const target = storage || browserStorage();
   const workspace = loadWorkspace(target);

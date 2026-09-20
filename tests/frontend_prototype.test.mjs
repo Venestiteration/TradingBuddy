@@ -94,3 +94,66 @@ test("AI SSE failures do not announce a successful response", () => {
   assert.match(app, /if \(completed\) \{\s*loadLocalAIState\(\);\s*state\.analysis = completed\.result;/);
   assert.match(app, /if \(completedResult\) \{\s*loadLocalAIState\(\);\s*state\.analysis = completedResult\.result;/);
 });
+
+test("streamPost sends visitor headers and exposes structured errors", async () => {
+  const previousDocument = globalThis.document;
+  const previousFetch = globalThis.fetch;
+  globalThis.document = { body: { dataset: { apiRoot: "/api" } } };
+  try {
+    const { streamPost } = await import("../frontend/api.js");
+    let request;
+    globalThis.fetch = async (url, options) => {
+      request = { url, options };
+      return {
+        ok: true,
+        body: { getReader: () => ({ read: async () => ({ done: true }) }) },
+      };
+    };
+
+    await streamPost("/chat/stream", { question: "q" }, () => {}, null, {
+      "X-TB-API-Key": "visitor-key",
+      "X-TB-Model": "visitor-model",
+    });
+
+    assert.equal(request.url, "/api/chat/stream");
+    assert.deepEqual(request.options.headers, {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      "X-TB-API-Key": "visitor-key",
+      "X-TB-Model": "visitor-model",
+    });
+
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 429,
+      body: {},
+      json: async () => ({ category: "quota", detail: "额度受限" }),
+    });
+    await assert.rejects(
+      () => streamPost("/research/stream", {}, () => {}, null),
+      (error) => {
+        assert.equal(error.message, "额度受限");
+        assert.equal(error.status, 429);
+        assert.deepEqual(error.body, { category: "quota", detail: "额度受限" });
+        return true;
+      },
+    );
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+  }
+});
+
+test("asset switches refresh local AI context before loading overview", () => {
+  const selectStart = app.indexOf("function selectAsset");
+  const selectEnd = app.indexOf("\nfunction ", selectStart + 1);
+  const selectBlock = app.slice(selectStart, selectEnd);
+  assert.match(selectBlock, /state\.assetId = id;[\s\S]*loadLocalAIState\(\)/);
+
+  const draftStart = app.indexOf("async function generateThesisDraft");
+  const draftEnd = app.indexOf("\nfunction ", draftStart + 1);
+  const draftBlock = app.slice(draftStart, draftEnd);
+  assert.ok(draftBlock.includes("state.abortController.signal, aiHeaders(state.aiConfig)"));
+});

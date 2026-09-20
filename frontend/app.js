@@ -12,6 +12,7 @@ import {
   AI_TOUR_KEY,
   SOURCE_TOUR_KEY,
   aiHeaders,
+  boundRecentMessages,
   clearAIData,
   disableAI,
   loadAIConfig,
@@ -591,7 +592,7 @@ async function generateThesisDraft() {
         renderSheet();
       }
       if (data.status === "failed") throw new Error(data.message || "判断草稿生成失败");
-    }, state.abortController.signal);
+    }, state.abortController.signal, aiHeaders(state.aiConfig));
   } catch (error) {
     if (error.name !== "AbortError") showToast(error.message, "error");
   } finally {
@@ -873,18 +874,7 @@ async function runChat(question) {
   setGenerating(true);
   renderConversation();
   requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
-  const recentMessages = state.localMessages.slice(-6).map(({ role, content }) => {
-    let bounded = String(content || "");
-    if (role === "assistant") {
-      try {
-        const parsed = JSON.parse(bounded);
-        bounded = parsed.result?.conclusion || parsed.conclusion || bounded;
-      } catch {
-        // Older local entries may already be plain text.
-      }
-    }
-    return { role, content: bounded.slice(0, 2000) };
-  });
+  const recentMessages = boundRecentMessages(state.localMessages);
   try {
     let completedResult = null;
     await stream("/chat/stream", {
@@ -1015,6 +1005,7 @@ function selectAsset(assetId) {
   state.thesisDraft = null;
   state.thesisAcceptedChanges = {};
   state.overview = null;
+  loadLocalAIState();
   state.popoverOpen = false;
   els.assetPopover.classList.remove("is-open");
   els.assetSwitcher.setAttribute("aria-expanded", "false");
