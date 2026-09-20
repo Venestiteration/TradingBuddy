@@ -32,7 +32,9 @@ def _iso(value) -> str:
     else:
         parsed = datetime.fromisoformat(_string(value).replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc).astimezone()
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
     return parsed.isoformat(timespec="seconds")
 
 
@@ -47,6 +49,10 @@ def _failed(provider: str, attempted_at: str, exc: Exception) -> ProviderResult:
     )
 
 
+def _cninfo_exchange(stock_code: str) -> str:
+    return "sse" if _string(stock_code).startswith(("5", "6", "9")) else "szse"
+
+
 class CninfoAnnouncementAdapter:
     provider = PROVIDER_CNINFO
 
@@ -55,6 +61,7 @@ class CninfoAnnouncementAdapter:
 
     def fetch(self, stock_code, start, end, attempted_at):
         try:
+            exchange = _cninfo_exchange(stock_code)
             stock_response = self.client.get(
                 "https://www.cninfo.com.cn/new/data/szse_stock.json",
                 timeout=12.0,
@@ -73,7 +80,7 @@ class CninfoAnnouncementAdapter:
                     data={
                         "pageNum": page_num,
                         "pageSize": 30,
-                        "column": "szse",
+                        "column": exchange,
                         "tabName": "fulltext",
                         "stock": f"{stock_code},{org_id}",
                         "seDate": f"{start:%Y-%m-%d}~{end:%Y-%m-%d}",
@@ -89,7 +96,7 @@ class CninfoAnnouncementAdapter:
                     timestamp = datetime.fromtimestamp(
                         int(row["announcementTime"]) / 1000,
                         tz=timezone.utc,
-                    ).astimezone()
+                    )
                     adjunct = _string(row.get("adjunctUrl")).lstrip("/")
                     announcement_id = _string(row.get("announcementId"))
                     items.append(
