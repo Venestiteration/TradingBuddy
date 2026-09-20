@@ -445,6 +445,7 @@ test("keyboard final source-tour actions open settings and restore focus to the 
   const response = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
   const dispatch = (type, event) => listeners.get(type)?.(event);
   const clickTarget = (matches) => ({ closest: (selector) => matches.has(selector) ? elements.get(selector) : null });
+  const clickTourNext = () => dispatch("click", { target: clickTarget(new Set(["[data-tour-next]"])) });
   const nextTourStep = (key) => dispatch("keydown", {
     key,
     target: elements.get("tour-next"),
@@ -454,7 +455,7 @@ test("keyboard final source-tour actions open settings and restore focus to the 
   const startSourceTour = () => {
     documentStub.activeElement = settingsButton;
     dispatch("click", { target: clickTarget(new Set(["[data-start-tour]"])) });
-    for (let index = 0; index < 4; index += 1) nextTourStep("ArrowRight");
+    for (let index = 0; index < 4; index += 1) clickTourNext();
   };
   const assertSettingsOpen = () => {
     assert.equal(sheet.classList.contains("is-open"), true);
@@ -481,7 +482,7 @@ test("keyboard final source-tour actions open settings and restore focus to the 
     await new Promise((resolve) => setImmediate(resolve));
 
     startSourceTour();
-    dispatch("click", { target: clickTarget(new Set(["[data-tour-next]"])) });
+    clickTourNext();
     assertSettingsOpen();
     assert.equal(elements.get("ai-settings").scrollIntoViewCalls.length, 1);
     closeSettings();
