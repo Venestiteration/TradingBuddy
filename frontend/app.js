@@ -9,9 +9,11 @@ import {
   thesisReviewSheet,
 } from "./thesis-workflow.js";
 import {
+  AI_API_PRESETS,
   AI_TOUR_KEY,
   SOURCE_TOUR_KEY,
   aiHeaders,
+  apiPresetFor,
   applyIfCurrentView,
   boundRecentMessages,
   captureView,
@@ -702,7 +704,10 @@ function addAssetSheet() {
 function settingsSheet() {
   const configured = Boolean(state.overview && state.overview.fetched_at);
   const aiFormHidden = aiEnabled() || state.aiSettingsExpanded ? "" : " hidden";
-  return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section ai-settings" id="ai-settings"><div class="setting-row"><div class="setting-copy"><strong>AI 分析</strong><span>使用你自己的模型密钥生成分析和继续追问</span></div><button class="switch pressable" type="button" role="switch" data-ai-toggle aria-checked="${aiEnabled()}" aria-label="${aiEnabled() ? "关闭 AI 分析" : "启用 AI 分析"}"></button></div><p class="local-privacy-note">配置和分析结果仅保存在当前浏览器。</p><form id="ai-settings-form" class="sheet-form ai-settings-form"${aiFormHidden}><label>API Key<div class="secret-field"><input name="api_key" type="password" autocomplete="off" value="${escapeHtml(state.aiConfig.apiKey)}" required><button type="button" class="text-button pressable" data-toggle-api-key>显示</button></div></label><label>模型名称<input name="model" placeholder="例如 gpt-4.1-mini 或 glm-4-flash" value="${escapeHtml(state.aiConfig.model)}" required></label><label>API 地址（选填）<input name="base_url" inputmode="url" placeholder="留空使用 OpenAI 官方接口" value="${escapeHtml(state.aiConfig.baseUrl)}"></label><div class="button-row"><button class="primary-button pressable" type="submit">保存并启用</button></div></form><div class="button-row"><button class="secondary-button pressable" type="button" data-replay-ai-tour>重新查看 AI 使用说明</button><button class="text-button danger pressable" type="button" data-clear-ai>清除本地 AI 配置</button></div></section></div>`;
+  const apiPreset = apiPresetFor(state.aiConfig.baseUrl);
+  const customBaseUrl = apiPreset.id === "custom" ? state.aiConfig.baseUrl : "";
+  const apiPresetOptions = AI_API_PRESETS.map((preset) => `<option value="${preset.id}"${preset.id === apiPreset.id ? " selected" : ""}>${escapeHtml(preset.label)}</option>`).join("");
+  return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section ai-settings" id="ai-settings"><div class="setting-row"><div class="setting-copy"><strong>AI 分析</strong><span>使用你自己的模型密钥生成分析和继续追问</span></div><button class="switch pressable" type="button" role="switch" data-ai-toggle aria-checked="${aiEnabled()}" aria-label="${aiEnabled() ? "关闭 AI 分析" : "启用 AI 分析"}"></button></div><p class="local-privacy-note">配置和分析结果仅保存在当前浏览器。</p><form id="ai-settings-form" class="sheet-form ai-settings-form"${aiFormHidden}><label>API Key<div class="secret-field"><input name="api_key" type="password" autocomplete="off" value="${escapeHtml(state.aiConfig.apiKey)}" required><button type="button" class="text-button pressable" data-toggle-api-key>显示</button></div></label><label>模型名称<input name="model" placeholder="例如 gpt-4.1-mini 或 glm-4-flash" value="${escapeHtml(state.aiConfig.model)}" required></label><label>模型服务<select name="api_url_preset" data-api-url-preset>${apiPresetOptions}</select></label><div class="api-url-custom" data-api-url-custom${apiPreset.id === "custom" ? "" : " hidden"}><label>自定义 API 地址<input name="custom_base_url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1" value="${escapeHtml(customBaseUrl)}"${apiPreset.id === "custom" ? " required" : ""}></label></div><p class="setting-hint">常用服务已预填地址；选择“自定义地址”可填写其他 HTTPS 兼容服务。</p><div class="button-row"><button class="primary-button pressable" type="submit">保存并启用</button></div></form><div class="button-row"><button class="secondary-button pressable" type="button" data-replay-ai-tour>重新查看 AI 使用说明</button><button class="text-button danger pressable" type="button" data-clear-ai>清除本地 AI 配置</button></div></section></div>`;
 }
 
 function captureSheetFocus(element) {
@@ -720,12 +725,19 @@ function restoreSheetFocus(selector) {
 
 function saveAISettings(form) {
   const values = Object.fromEntries(new FormData(form).entries());
+  const apiPreset = AI_API_PRESETS.find((preset) => preset.id === values.api_url_preset) || AI_API_PRESETS[0];
+  const baseUrl = apiPreset.id === "custom" ? String(values.custom_base_url || "").trim() : apiPreset.url;
+  if (apiPreset.id === "custom" && !baseUrl) {
+    showToast("请填写自定义 API 地址", "error");
+    return;
+  }
   try {
     state.aiConfig = saveAIConfig({
       enabled: true,
       apiKey: values.api_key,
       model: values.model,
-      baseUrl: values.base_url,
+      baseUrl,
+      apiMode: apiPreset.mode,
     });
     state.aiSettingsExpanded = false;
     loadLocalAIState();
@@ -737,6 +749,15 @@ function saveAISettings(form) {
   } catch (error) {
     showToast(error.message, "error");
   }
+}
+
+function syncAPIUrlPreset(select) {
+  const custom = select.value === "custom";
+  const wrapper = select.form?.querySelector("[data-api-url-custom]");
+  const input = wrapper?.querySelector("input[name=custom_base_url]");
+  if (!wrapper || !input) return;
+  wrapper.hidden = !custom;
+  input.required = custom;
 }
 
 function turnOffAI(trigger = null) {
@@ -1363,6 +1384,11 @@ els.promptInput.addEventListener("keydown", (event) => {
     event.preventDefault();
     els.composer.requestSubmit();
   }
+});
+
+document.addEventListener("change", (event) => {
+  const apiPreset = event.target.closest?.("[data-api-url-preset]");
+  if (apiPreset) syncAPIUrlPreset(apiPreset);
 });
 
 document.addEventListener("click", (event) => {

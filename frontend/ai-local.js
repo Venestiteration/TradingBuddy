@@ -4,7 +4,28 @@ export const SOURCE_TOUR_KEY = "tradingbuddy.tour.sources.v2";
 export const AI_TOUR_KEY = "tradingbuddy.tour.ai.v1";
 export const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
-const blankConfig = () => ({ enabled: false, apiKey: "", model: "", baseUrl: "", updatedAt: "" });
+export const AI_API_PRESETS = [
+  { id: "openai", label: "OpenAI 官方", url: DEFAULT_BASE_URL, mode: "responses" },
+  { id: "zhipu", label: "智谱 AI", url: "https://open.bigmodel.cn/api/paas/v4", mode: "chat" },
+  { id: "deepseek", label: "DeepSeek", url: "https://api.deepseek.com/v1", mode: "chat" },
+  { id: "qwen", label: "通义千问（百炼）", url: "https://dashscope.aliyuncs.com/compatible-mode/v1", mode: "chat" },
+  { id: "siliconflow", label: "硅基流动", url: "https://api.siliconflow.cn/v1", mode: "chat" },
+  { id: "moonshot", label: "月之暗面", url: "https://api.moonshot.cn/v1", mode: "chat" },
+  { id: "custom", label: "自定义地址", url: "", mode: "chat" },
+];
+
+const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "").toLowerCase();
+
+export function apiPresetFor(baseUrl) {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized || normalized === normalizeBaseUrl(DEFAULT_BASE_URL)) return AI_API_PRESETS[0];
+  return AI_API_PRESETS.find((preset) => preset.url && normalizeBaseUrl(preset.url) === normalized)
+    || AI_API_PRESETS.at(-1);
+}
+
+const apiModeForBaseUrl = (baseUrl) => apiPresetFor(baseUrl).mode;
+
+const blankConfig = () => ({ enabled: false, apiKey: "", model: "", baseUrl: "", apiMode: "responses", updatedAt: "" });
 const parse = (value, fallback) => {
   try { return JSON.parse(value) ?? fallback; } catch { return fallback; }
 };
@@ -29,11 +50,16 @@ const safeRemove = (storage, key) => {
 export function loadAIConfig(storage = null) {
   const target = storage || browserStorage();
   const value = parse(safeGet(target, AI_CONFIG_KEY), blankConfig());
+  const baseUrl = typeof value.baseUrl === "string" ? value.baseUrl.slice(0, 512) : "";
+  const apiMode = value.apiMode === "chat" || value.apiMode === "responses"
+    ? value.apiMode
+    : apiModeForBaseUrl(baseUrl);
   return {
     enabled: value.enabled === true,
     apiKey: typeof value.apiKey === "string" ? value.apiKey.slice(0, 512) : "",
     model: typeof value.model === "string" ? value.model.slice(0, 128) : "",
-    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl.slice(0, 512) : "",
+    baseUrl,
+    apiMode,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : "",
   };
 }
@@ -44,6 +70,9 @@ export function validateAIConfig(input) {
     apiKey: String(input.apiKey || "").trim(),
     model: String(input.model || "").trim(),
     baseUrl: String(input.baseUrl || "").trim(),
+    apiMode: input.apiMode === "chat" || input.apiMode === "responses"
+      ? input.apiMode
+      : apiModeForBaseUrl(input.baseUrl),
   };
   if (!value.apiKey || value.apiKey.length > 512) throw new Error("请填写有效的 API Key");
   if (!value.model || value.model.length > 128) throw new Error("请填写有效的模型名称");
@@ -85,6 +114,7 @@ export function aiHeaders(config) {
     "X-TB-API-Key": config.apiKey,
     "X-TB-Model": config.model,
     "X-TB-Base-URL": config.baseUrl || DEFAULT_BASE_URL,
+    "X-TB-API-Mode": config.apiMode || apiModeForBaseUrl(config.baseUrl),
   };
 }
 

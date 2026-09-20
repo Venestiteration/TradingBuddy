@@ -17,6 +17,7 @@ class VisitorAIConfig:
     model: str
     base_url: str
     resolved_ips: tuple[str, ...]
+    api_mode: str = "responses"
 
 
 def _public_ip(value: str) -> bool:
@@ -35,6 +36,7 @@ def build_visitor_ai_config(
     api_key: str | None,
     model: str | None,
     base_url: str | None,
+    api_mode: str | None = None,
     resolver: Callable = socket.getaddrinfo,
 ) -> VisitorAIConfig:
     key = (api_key or "").strip()
@@ -55,6 +57,11 @@ def build_visitor_ai_config(
         raise HTTPException(status_code=400, detail="API 地址必须是不含凭据的 HTTPS 公网地址")
     if parsed.query or parsed.fragment or host == "localhost" or host.endswith(".local"):
         raise HTTPException(status_code=400, detail="API 地址不是允许的公网地址")
+    mode = (api_mode or "").strip().lower()
+    if not mode:
+        mode = "responses" if host == "api.openai.com" else "chat"
+    if mode not in {"responses", "chat"}:
+        raise HTTPException(status_code=400, detail="API 调用模式不受支持")
     try:
         addresses = [item[4][0] for item in resolver(host, parsed.port or 443, type=socket.SOCK_STREAM)]
     except (OSError, ValueError) as exc:
@@ -66,6 +73,7 @@ def build_visitor_ai_config(
         model=model_name,
         base_url=url.rstrip("/"),
         resolved_ips=tuple(dict.fromkeys(addresses)),
+        api_mode=mode,
     )
 
 
@@ -73,5 +81,6 @@ def visitor_ai_config(
     api_key: Annotated[Optional[str], Header(alias="X-TB-API-Key")] = None,
     model: Annotated[Optional[str], Header(alias="X-TB-Model")] = None,
     base_url: Annotated[Optional[str], Header(alias="X-TB-Base-URL")] = None,
+    api_mode: Annotated[Optional[str], Header(alias="X-TB-API-Mode")] = None,
 ) -> VisitorAIConfig:
-    return build_visitor_ai_config(api_key, model, base_url)
+    return build_visitor_ai_config(api_key, model, base_url, api_mode=api_mode)

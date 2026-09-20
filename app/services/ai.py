@@ -138,6 +138,11 @@ def _uses_zhipu_chat_api(config: VisitorAIConfig) -> bool:
     return "bigmodel.cn" in value or "zhipu" in value
 
 
+def _uses_chat_api(config: VisitorAIConfig) -> bool:
+    # 保持对旧版手工构造 VisitorAIConfig 的兼容；请求依赖会为新配置显式设置 api_mode。
+    return config.api_mode == "chat" or _uses_zhipu_chat_api(config)
+
+
 def _zhipu_extra_body(config: VisitorAIConfig) -> dict[str, Any]:
     """为不同智谱模型选择可用的思考参数。"""
     if config.model.lower().startswith("glm-5.3"):
@@ -192,13 +197,13 @@ def call_structured_model(
     """按指定 JSON Schema 调用模型，兼容 OpenAI Responses 与智谱 Chat API。"""
     client = _client(config)
     try:
-        if _uses_zhipu_chat_api(config):
+        if _uses_chat_api(config):
             # 智谱兼容 OpenAI 的 Chat Completions，但不提供项目原先调用的
             # /responses 路径。使用 JSON mode，再由 validate_result 做字段
             # 和证据引用的二次校验。
-            response = client.chat.completions.create(
-                model=config.model,
-                messages=[
+            chat_kwargs = {
+                "model": config.model,
+                "messages": [
                     {
                         "role": "system",
                         "content": (
@@ -211,11 +216,13 @@ def call_structured_model(
                         "content": json.dumps(context, ensure_ascii=False, default=str),
                     },
                 ],
-                response_format={"type": "json_object"},
-                extra_body=_zhipu_extra_body(config),
-                temperature=0.2,
-                max_tokens=max_tokens,
-            )
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2,
+                "max_tokens": max_tokens,
+            }
+            if _uses_zhipu_chat_api(config):
+                chat_kwargs["extra_body"] = _zhipu_extra_body(config)
+            response = client.chat.completions.create(**chat_kwargs)
             raw = response.choices[0].message.content
         else:
             response = client.responses.create(

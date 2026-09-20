@@ -15,6 +15,14 @@ ZHIPU_CONFIG = VisitorAIConfig(
     resolved_ips=("8.8.8.8",),
 )
 
+CHAT_CONFIG = VisitorAIConfig(
+    api_key="visitor-key",
+    model="deepseek-chat",
+    base_url="https://api.deepseek.com/v1",
+    resolved_ips=("8.8.8.8",),
+    api_mode="chat",
+)
+
 
 class FakeChatCompletions:
     def __init__(self):
@@ -90,6 +98,24 @@ class ZhipuCompatibilityTest(unittest.TestCase):
                 {"reasoning_effort": "low"},
             )
             self.assertEqual(fake.chat.completions.kwargs["messages"][0]["role"], "system")
+        finally:
+            ai._client = original_client
+
+    def test_generic_chat_provider_uses_chat_completions(self):
+        original_client = ai._client
+        try:
+            fake = FakeClient()
+            ai._client = lambda config: fake
+
+            result = ai._call_model(
+                CHAT_CONFIG,
+                "system instructions",
+                {"stock": {"code": "600519"}},
+            )
+
+            self.assertEqual(result["impact_state"], "insufficient")
+            self.assertEqual(fake.chat.completions.kwargs["response_format"], {"type": "json_object"})
+            self.assertNotIn("extra_body", fake.chat.completions.kwargs)
         finally:
             ai._client = original_client
 

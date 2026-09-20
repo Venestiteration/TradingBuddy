@@ -3,8 +3,10 @@ import { test } from "node:test";
 
 import {
   AI_CONFIG_KEY,
+  AI_API_PRESETS,
   AI_WORKSPACE_KEY,
   aiHeaders,
+  apiPresetFor,
   clearAIData,
   disableAI,
   loadAIConfig,
@@ -37,7 +39,18 @@ test("AI defaults off and valid configuration survives reload", () => {
     "X-TB-API-Key": "sk-user",
     "X-TB-Model": "gpt-4.1-mini",
     "X-TB-Base-URL": "https://api.openai.com/v1",
+    "X-TB-API-Mode": "responses",
   });
+});
+
+test("AI endpoint presets include common providers and preserve custom endpoints", () => {
+  assert.deepEqual(
+    AI_API_PRESETS.map(({ id }) => id),
+    ["openai", "zhipu", "deepseek", "qwen", "siliconflow", "moonshot", "custom"],
+  );
+  assert.equal(apiPresetFor("https://api.deepseek.com/v1").id, "deepseek");
+  assert.equal(apiPresetFor("https://custom.example/v1").id, "custom");
+  assert.equal(apiPresetFor("https://custom.example/v1").mode, "chat");
 });
 
 test("disabling preserves credentials while clearing removes all AI state", () => {

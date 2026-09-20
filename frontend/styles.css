@@ -1406,7 +1406,8 @@ a.source-chip { display: inline-flex; align-items: center; }
   font-weight: 620;
 }
 .sheet-form input,
-.sheet-form textarea {
+.sheet-form textarea,
+.sheet-form select {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid var(--line-strong);
@@ -1418,7 +1419,8 @@ a.source-chip { display: inline-flex; align-items: center; }
   font-size: 14px;
 }
 .sheet-form input:focus,
-.sheet-form textarea:focus {
+.sheet-form textarea:focus,
+.sheet-form select:focus {
   border-color: rgba(0,113,227,.46);
   box-shadow: 0 0 0 4px rgba(0,113,227,.08);
 }
@@ -1426,6 +1428,13 @@ a.source-chip { display: inline-flex; align-items: center; }
   min-height: 104px;
   resize: vertical;
   line-height: 1.6;
+}
+
+.setting-hint {
+  margin: -2px 0 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.55;
 }
 .search-results {
   display: grid;

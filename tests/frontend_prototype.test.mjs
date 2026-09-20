@@ -95,6 +95,10 @@ test("visitor AI settings preserve the current interaction style", () => {
   assert.ok(index.includes('id="composer-dock"'));
   assert.ok(index.includes('data-tour="settings"'));
   assert.ok(app.includes('id="ai-settings-form"'));
+  assert.ok(app.includes('data-api-url-preset'));
+  assert.ok(app.includes('data-api-url-custom'));
+  assert.ok(aiLocal.includes("deepseek"));
+  assert.ok(aiLocal.includes("siliconflow"));
   assert.ok(app.includes('role="switch"'));
   assert.ok(app.includes("清除本地 AI 配置"));
   assert.ok(app.includes("配置和分析结果仅保存在当前浏览器"));

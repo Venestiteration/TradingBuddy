@@ -22,6 +22,7 @@ class VisitorAIConfigTest(unittest.TestCase):
     def test_blank_url_uses_openai_default(self):
         config = build_visitor_ai_config("sk-user", "gpt-4.1-mini", "", resolver=public_resolver)
         self.assertEqual(config.base_url, "https://api.openai.com/v1")
+        self.assertEqual(config.api_mode, "responses")
 
     def test_public_compatible_url_is_accepted(self):
         config = build_visitor_ai_config(
@@ -29,6 +30,22 @@ class VisitorAIConfigTest(unittest.TestCase):
             resolver=public_resolver,
         )
         self.assertEqual(config.model, "glm-4-flash")
+        self.assertEqual(config.api_mode, "chat")
+
+    def test_compatible_url_can_explicitly_select_chat_mode(self):
+        config = build_visitor_ai_config(
+            "visitor-key", "custom-model", "https://api.example.com/v1",
+            api_mode="chat", resolver=public_resolver,
+        )
+        self.assertEqual(config.api_mode, "chat")
+
+    def test_unknown_api_mode_is_rejected(self):
+        with self.assertRaises(HTTPException) as caught:
+            build_visitor_ai_config(
+                "visitor-key", "custom-model", "https://api.example.com/v1",
+                api_mode="unknown", resolver=public_resolver,
+            )
+        self.assertEqual(caught.exception.status_code, 400)
 
     def test_missing_key_or_model_is_rejected(self):
         for key, model in (("", "gpt-4.1-mini"), ("sk-user", "")):
