@@ -133,6 +133,38 @@ export function applyIfCurrentView(state, view, apply) {
   return true;
 }
 
+export function transitionAssetView(state, assetId, { cancelGeneration = () => {}, loadLocalAIState = () => {} } = {}) {
+  if (state.busy) cancelGeneration();
+  else if (state.abortController) state.abortController.abort();
+  state.abortController = null;
+  state.viewGeneration += 1;
+  state.assetId = assetId;
+  state.selectedEventId = null;
+  state.analysis = null;
+  state.thesisContext = null;
+  state.thesisDraft = null;
+  state.thesisDraftPending = false;
+  state.thesisAcceptedChanges = {};
+  state.overview = null;
+  loadLocalAIState();
+}
+
+export async function runCurrentViewRefresh(state, view, refresh, loadOverview, onSuccess, onError) {
+  if (!isCurrentView(state, view)) return false;
+  try {
+    await refresh();
+    if (!isCurrentView(state, view)) return false;
+    await loadOverview(view.assetId);
+    if (!isCurrentView(state, view)) return false;
+    onSuccess();
+    return true;
+  } catch (error) {
+    if (!isCurrentView(state, view)) return false;
+    onError(error);
+    return false;
+  }
+}
+
 function updateAsset(assetId, update, storage) {
   const target = storage || browserStorage();
   const workspace = loadWorkspace(target);

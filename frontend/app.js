@@ -20,9 +20,11 @@ import {
   isCurrentView,
   loadAIConfig,
   loadAssetAI,
+  runCurrentViewRefresh,
   saveAIConfig,
   saveAnalysis,
   saveConversationTurn,
+  transitionAssetView,
 } from "./ai-local.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -940,18 +942,10 @@ async function loadAssets(preferredId = null) {
   state.assets = body.assets || [];
   const nextAssetId = preferredId || state.assetId || state.assets[0]?.id || null;
   if (nextAssetId !== state.assetId) {
-    if (state.busy) abortGeneration();
-    else if (state.abortController) state.abortController.abort();
-    state.abortController = null;
-    state.viewGeneration += 1;
-    state.assetId = nextAssetId;
-    state.selectedEventId = null;
-    state.analysis = null;
-    state.overview = null;
-    state.thesisContext = null;
-    state.thesisDraft = null;
-    state.thesisDraftPending = false;
-    loadLocalAIState();
+    transitionAssetView(state, nextAssetId, {
+      cancelGeneration: abortGeneration,
+      loadLocalAIState,
+    });
   }
   renderAssetPopover();
   if (state.assetId) await loadOverview(state.assetId);
@@ -991,12 +985,18 @@ async function loadOverview(assetId) {
 
 async function refreshData() {
   if (!state.assetId || state.busy) return;
+  const view = captureView(state);
   try {
-    await api(`/assets/${state.assetId}/refresh`, { method: "POST" });
-    await loadOverview(state.assetId);
-    showToast("数据已刷新", "success");
+    await runCurrentViewRefresh(
+      state,
+      view,
+      () => api(`/assets/${view.assetId}/refresh`, { method: "POST" }),
+      (assetId) => loadOverview(assetId),
+      () => showToast("数据已刷新", "success"),
+      (error) => showToast(error.message, "error"),
+    );
   } catch (error) {
-    showToast(error.message, "error");
+    if (isCurrentView(state, view)) showToast(error.message, "error");
   }
 }
 
@@ -1046,18 +1046,13 @@ async function saveThesis(form) {
   }
 }
 
-function selectAsset(assetId) {
+export function selectAsset(assetId) {
   const id = Number(assetId);
   if (!state.assets.some((asset) => asset.id === id)) return;
-  if (state.busy) abortGeneration();
-  state.assetId = id;
-  state.selectedEventId = null;
-  state.analysis = null;
-  state.thesisContext = null;
-  state.thesisDraft = null;
-  state.thesisAcceptedChanges = {};
-  state.overview = null;
-  loadLocalAIState();
+  transitionAssetView(state, id, {
+    cancelGeneration: abortGeneration,
+    loadLocalAIState,
+  });
   state.popoverOpen = false;
   els.assetPopover.classList.remove("is-open");
   els.assetSwitcher.setAttribute("aria-expanded", "false");

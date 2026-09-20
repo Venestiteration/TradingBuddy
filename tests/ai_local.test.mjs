@@ -111,6 +111,82 @@ test("view guard ignores stale AI completions", async () => {
   assert.equal(saved, true);
 });
 
+test("asset transitions advance generations and reset the active workspace", async () => {
+  const { transitionAssetView, captureView } = await import("../frontend/ai-local.js");
+  assert.equal(typeof transitionAssetView, "function");
+  const aborted = [];
+  const loadedAssets = [];
+  const state = {
+    assetId: "A",
+    viewGeneration: 4,
+    busy: true,
+    abortController: { abort: () => aborted.push("controller") },
+    selectedEventId: "event-a",
+    analysis: { conclusion: "old" },
+    thesisContext: { old: true },
+    thesisDraft: { old: true },
+    thesisDraftPending: true,
+    thesisAcceptedChanges: { core_thesis: "changed" },
+    overview: { old: true },
+  };
+
+  transitionAssetView(state, "B", {
+    cancelGeneration: () => {
+      aborted.push("generation");
+      state.busy = false;
+      state.abortController = null;
+    },
+    loadLocalAIState: () => loadedAssets.push(state.assetId),
+  });
+  const viewB = captureView(state);
+
+  state.abortController = { abort: () => aborted.push("controller") };
+  transitionAssetView(state, "A", {
+    cancelGeneration: () => aborted.push("unexpected-generation-cancel"),
+    loadLocalAIState: () => loadedAssets.push(state.assetId),
+  });
+
+  assert.equal(state.assetId, "A");
+  assert.equal(state.viewGeneration, 6);
+  assert.notDeepEqual(captureView(state), viewB);
+  assert.deepEqual(loadedAssets, ["B", "A"]);
+  assert.deepEqual(aborted, ["generation", "controller"]);
+  assert.equal(state.selectedEventId, null);
+  assert.equal(state.analysis, null);
+  assert.equal(state.thesisContext, null);
+  assert.equal(state.thesisDraft, null);
+  assert.equal(state.thesisDraftPending, false);
+  assert.deepEqual(state.thesisAcceptedChanges, {});
+  assert.equal(state.overview, null);
+});
+
+test("refresh guard ignores stale completion and toasts after a switch", async () => {
+  const { captureView, runCurrentViewRefresh } = await import("../frontend/ai-local.js");
+  assert.equal(typeof runCurrentViewRefresh, "function");
+  const state = { assetId: "A", viewGeneration: 8 };
+  const view = captureView(state);
+  let overviewLoads = 0;
+  let successToasts = 0;
+  let errorToasts = 0;
+
+  const completed = await runCurrentViewRefresh(
+    state,
+    view,
+    async () => {
+      state.assetId = "B";
+      state.viewGeneration += 1;
+    },
+    async () => { overviewLoads += 1; },
+    () => { successToasts += 1; },
+    () => { errorToasts += 1; },
+  );
+
+  assert.equal(completed, false);
+  assert.equal(overviewLoads, 0);
+  assert.equal(successToasts, 0);
+  assert.equal(errorToasts, 0);
+});
+
 test("null workspace assets fall back to an empty workspace", () => {
   const storage = new MemoryStorage();
   storage.setItem(AI_WORKSPACE_KEY, JSON.stringify({ assets: null }));

@@ -150,7 +150,7 @@ test("asset switches refresh local AI context before loading overview", () => {
   const selectStart = app.indexOf("function selectAsset");
   const selectEnd = app.indexOf("\nfunction ", selectStart + 1);
   const selectBlock = app.slice(selectStart, selectEnd);
-  assert.match(selectBlock, /state\.assetId = id;[\s\S]*loadLocalAIState\(\)/);
+  assert.match(selectBlock, /transitionAssetView\(state, id,[\s\S]*loadLocalAIState/);
 
   const draftStart = app.indexOf("async function generateThesisDraft");
   const draftEnd = app.indexOf("\nfunction ", draftStart + 1);
@@ -158,7 +158,141 @@ test("asset switches refresh local AI context before loading overview", () => {
   assert.ok(draftBlock.includes("state.abortController.signal, aiHeaders(state.aiConfig)"));
 });
 
+test("runtime asset switches invalidate out-of-order views and load the selected workspace", async () => {
+  const previousDocument = globalThis.document;
+  const previousFetch = globalThis.fetch;
+  const previousLocalStorage = globalThis.localStorage;
+  const previousHTMLElement = globalThis.HTMLElement;
+  const previousWindow = globalThis.window;
+  const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+
+  class FakeElement {
+    constructor() {
+      this.dataset = {};
+      this.classList = { add() {}, remove() {}, toggle() {} };
+      this.style = { setProperty() {} };
+      this.listeners = new Map();
+      this.isConnected = true;
+      this.hidden = false;
+      this.innerHTML = "";
+    }
+
+    addEventListener(type, handler) { this.listeners.set(type, handler); }
+    setAttribute() {}
+    querySelector() { return null; }
+    querySelectorAll() { return []; }
+    scrollTo() {}
+    focus() {}
+    closest() { return null; }
+    getBoundingClientRect() { return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
+  }
+
+  class TestStorage {
+    constructor() { this.values = new Map(); }
+    getItem(key) { return this.values.get(key) ?? null; }
+    setItem(key, value) { this.values.set(key, String(value)); }
+    removeItem(key) { this.values.delete(key); }
+  }
+
+  const selectors = [
+    ".app-shell", "#conversation", ".conversation-scroll", "#asset-switcher", "#asset-switcher-label",
+    "#asset-popover", "#composer", "#composer textarea", "#composer .send-button", "#detail-sheet", "#toast",
+    "#tour-layer", "#tour-popover", "#tour-focus-ring", "#tour-blocker", ".tour-mask-top", ".tour-mask-left",
+    ".tour-mask-right", ".tour-mask-bottom",
+  ];
+  const elements = new Map(selectors.map((selector) => [selector, new FakeElement()]));
+  const documentStub = {
+    body: { dataset: { apiRoot: "/api" } },
+    activeElement: null,
+    querySelector: (selector) => elements.get(selector) || null,
+    addEventListener() {},
+  };
+  const storage = new TestStorage();
+  storage.setItem("tradingbuddy.tour.sources.v2", "true");
+  storage.setItem("tradingbuddy.tour.ai.v1", "true");
+  storage.setItem("tradingbuddy-tour-complete-v1", "true");
+  storage.setItem("tradingbuddy.ai.workspace.v1", JSON.stringify({ assets: {
+    1: { messages: [{ role: "assistant", content: "old-a" }], analyses: [] },
+    2: { messages: [{ role: "assistant", content: "new-b" }], analyses: [] },
+  } }));
+
+  const overviewRequests = [];
+  let assetsRequested = false;
+  const response = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+  const fetchStub = async (url) => {
+    if (url.endsWith("/assets")) {
+      assetsRequested = true;
+      return response({ assets: [
+        { id: 1, stock_name: "A", stock_code: "000001", asset_type: "watchlist" },
+        { id: 2, stock_name: "B", stock_code: "000002", asset_type: "watchlist" },
+      ] });
+    }
+    const match = url.match(/\/assets\/(\d+)\/overview$/);
+    if (match) {
+      const request = {};
+      const promise = new Promise((resolve) => { request.resolve = resolve; });
+      overviewRequests.push({ assetId: Number(match[1]), resolve: request.resolve });
+      return promise;
+    }
+    if (/\/assets\/\d+\/theses$/.test(url)) return response({ history: [] });
+    if (/\/assets\/\d+\/importance\?days=/.test(url)) return response({ rows: [] });
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  const waitFor = async (predicate) => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (predicate()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail("timed out waiting for runtime app request");
+  };
+
+  globalThis.document = documentStub;
+  globalThis.fetch = fetchStub;
+  globalThis.localStorage = storage;
+  globalThis.HTMLElement = FakeElement;
+  globalThis.window = { innerWidth: 1280, innerHeight: 800, addEventListener() {} };
+  globalThis.requestAnimationFrame = (callback) => callback();
+
+  try {
+    const { selectAsset } = await import(`../frontend/app.js?runtime=${Date.now()}`);
+    await waitFor(() => assetsRequested && overviewRequests.length === 1);
+
+    selectAsset(2);
+    await waitFor(() => overviewRequests.length === 2);
+
+    selectAsset(1);
+    await waitFor(() => overviewRequests.length === 3);
+
+    overviewRequests[0].resolve(response({ asset: { stock_name: "stale A" }, events: [] }));
+    overviewRequests[1].resolve(response({ asset: { stock_name: "stale B" }, events: [] }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale A|stale B/);
+
+    overviewRequests[2].resolve(response({ asset: { stock_name: "current A", stock_code: "000001" }, events: [] }));
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("current A"));
+    assert.match(elements.get("#conversation").innerHTML, /old-a/);
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale A|stale B/);
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
+    if (previousHTMLElement === undefined) delete globalThis.HTMLElement;
+    else globalThis.HTMLElement = previousHTMLElement;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousRequestAnimationFrame;
+  }
+});
+
 test("AI and overview work use the view generation guard", () => {
   assert.ok(app.includes("viewGeneration"));
   assert.ok(app.includes("applyIfCurrentView"));
+  assert.ok(app.includes("transitionAssetView"));
+  assert.ok(app.includes("runCurrentViewRefresh"));
 });
