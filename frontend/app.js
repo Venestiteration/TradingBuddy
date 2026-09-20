@@ -98,12 +98,17 @@ function syncAIMode() {
   els.appShell.classList.toggle("ai-disabled", !aiEnabled());
 }
 
-const tourSteps = [
+const sourceTourSteps = [
   { target: '[data-tour="asset"]', title: "选择标的", body: "这里只显示你的持仓和自选。点击可切换当前研究标的。" },
-  { target: '[data-tour="dynamic"]', title: "查看动态", body: "先看当前最重要的变化，以及它是否影响你原来的判断。" },
-  { target: '[data-tour="actions"]', title: "继续理解", body: "点击快捷问题继续追问；展开分析可区分事实、推断和未知。" },
-  { target: '[data-tour="composer"]', title: "自由追问", body: "有其他问题，直接在这里输入。回答会继承当前标的和证据。" },
-  { target: '[data-tour="archive"]', title: "研究档案", body: "在这里核验判断、数据、推断与来源。页面里的数值和结论也能直接定位到对应依据。" },
+  { target: '[data-tour="dynamic"]', title: "查看公开动态", body: "AI 关闭时仍会收集行情、公告、新闻和可核验来源。" },
+  { target: ".importance-timeline", title: "识别研究重点", body: "重要性时间线由确定性规则整理，不需要调用大模型。" },
+  { target: '[data-tour="archive"]', title: "核验数据与来源", body: "研究档案会保留行情口径和原始来源，便于独立核验。" },
+  { target: '[data-tour="settings"]', title: "按需启用 AI", body: "AI 默认关闭。进入设置并填写自己的 API Key 后，可生成分析和继续追问。", action: "open-ai-settings" },
+];
+
+const aiTourSteps = [
+  { target: '[data-action="run-analysis"]', title: "生成证据约束的分析", body: "分析会区分已知事实、当前推断、未知和下一步核验。" },
+  { target: '[data-tour="composer"]', title: "围绕证据继续追问", body: "问题和回答只保存在当前浏览器，不会进入公共数据库。" },
 ];
 
 function escapeHtml(value) {
@@ -1188,19 +1193,20 @@ function setFixedRect(element, left, top, width, height) {
 }
 
 function renderTourPopover() {
-  const step = tourSteps[state.tourIndex];
-  const isLast = state.tourIndex === tourSteps.length - 1;
+  const step = state.tourSteps[state.tourIndex];
+  const isLast = state.tourIndex === state.tourSteps.length - 1;
+  const nextLabel = isLast && step.action === "open-ai-settings" ? "打开 AI 设置" : isLast ? "开始使用" : "下一步";
   els.tourPopover.innerHTML = `
-    <div class="tour-step">${state.tourIndex + 1} / ${tourSteps.length}</div>
+    <div class="tour-step">${state.tourIndex + 1} / ${state.tourSteps.length}</div>
     <h2 class="tour-title" id="tour-title">${step.title}</h2>
     <p class="tour-body" id="tour-body">${step.body}</p>
-    <div class="tour-actions"><button class="tour-skip pressable" type="button" data-tour-skip>跳过</button>${state.tourIndex > 0 ? '<button class="tour-back pressable" type="button" data-tour-prev>上一步</button>' : '<span aria-hidden="true"></span>'}<button class="tour-next pressable" type="button" data-tour-next>${isLast ? "开始使用" : "下一步"}</button></div>
+    <div class="tour-actions"><button class="tour-skip pressable" type="button" data-tour-skip>跳过</button>${state.tourIndex > 0 ? '<button class="tour-back pressable" type="button" data-tour-prev>上一步</button>' : '<span aria-hidden="true"></span>'}<button class="tour-next pressable" type="button" data-tour-next>${nextLabel}</button></div>
   `;
 }
 
 function positionTour() {
   if (!state.tourActive) return;
-  const step = tourSteps[state.tourIndex];
+  const step = state.tourSteps[state.tourIndex];
   const target = document.querySelector(step.target);
   if (!target) return;
   const rect = target.getBoundingClientRect();
@@ -1234,10 +1240,10 @@ function positionTour() {
 
 function showTourStep(index) {
   if (!state.tourActive) return;
-  state.tourIndex = Math.max(0, Math.min(index, tourSteps.length - 1));
-  const target = document.querySelector(tourSteps[state.tourIndex].target);
+  state.tourIndex = Math.max(0, Math.min(index, state.tourSteps.length - 1));
+  const target = document.querySelector(state.tourSteps[state.tourIndex].target);
   if (!target) {
-    if (state.tourIndex < tourSteps.length - 1) showTourStep(state.tourIndex + 1);
+    if (state.tourIndex < state.tourSteps.length - 1) showTourStep(state.tourIndex + 1);
     else finishTour(false);
     return;
   }
@@ -1252,14 +1258,28 @@ function showTourStep(index) {
   });
 }
 
-function startTour(force = false) {
-  const storageKey = "tradingbuddy-tour-complete-v1";
-  if (state.tourActive || (!force && localStorage.getItem(storageKey) === "true")) return;
+function tourWasSeen(storageKey) {
+  try { return localStorage.getItem(storageKey) === "true"; }
+  catch { return false; }
+}
+
+function rememberTour(storageKey) {
+  try { localStorage.setItem(storageKey, "true"); }
+  catch { /* Source browsing remains usable when storage is blocked. */ }
+}
+
+function startTour(kind = aiEnabled() ? "ai" : "sources", force = false) {
+  const storageKey = kind === "ai" ? AI_TOUR_KEY : SOURCE_TOUR_KEY;
+  if (state.tourActive || (!force && tourWasSeen(storageKey))) return;
+  const candidates = kind === "ai" ? aiTourSteps : sourceTourSteps;
+  state.tourSteps = candidates.filter((step) => document.querySelector(step.target));
+  if (!state.tourSteps.length) return;
   clearTimeout(state.tourCloseTimer);
   state.tourReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   closeAssetPopover();
   closeSheet();
   state.tourActive = true;
+  state.tourKind = kind;
   state.tourIndex = 0;
   els.tourLayer.hidden = false;
   els.appShell.inert = true;
@@ -1276,7 +1296,7 @@ function finishTour(completed = true) {
   state.tourActive = false;
   els.appShell.inert = false;
   els.tourLayer.classList.remove("is-active");
-  if (completed) localStorage.setItem("tradingbuddy-tour-complete-v1", "true");
+  if (completed) rememberTour(state.tourKind === "ai" ? AI_TOUR_KEY : SOURCE_TOUR_KEY);
   state.tourCloseTimer = setTimeout(() => {
     els.tourLayer.hidden = true;
     if (state.tourReturnFocus?.isConnected) state.tourReturnFocus.focus();
@@ -1341,10 +1361,23 @@ document.addEventListener("click", (event) => {
   const clearAIButton = event.target.closest("[data-clear-ai]");
   const replayAITourButton = event.target.closest("[data-replay-ai-tour]");
 
-  if (event.target.closest("[data-start-tour]")) startTour(true);
+  if (event.target.closest("[data-start-tour]")) startTour(aiEnabled() ? "ai" : "sources", true);
   if (event.target.closest("[data-tour-skip]")) finishTour(true);
   if (event.target.closest("[data-tour-prev]")) showTourStep(state.tourIndex - 1);
-  if (event.target.closest("[data-tour-next]")) state.tourIndex === tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
+  const tourNext = event.target.closest("[data-tour-next]");
+  if (tourNext) {
+    const step = state.tourSteps[state.tourIndex];
+    const opensAISettings = state.tourKind === "sources" && step?.action === "open-ai-settings";
+    if (state.tourIndex === state.tourSteps.length - 1) {
+      finishTour(true);
+      if (opensAISettings) {
+        state.tourReturnFocus = null;
+        state.aiSettingsExpanded = true;
+        openSheet("settings");
+        requestAnimationFrame(() => els.sheet.querySelector("#ai-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }
+    } else showTourStep(state.tourIndex + 1);
+  }
   if (aiToggle) {
     if (aiEnabled()) turnOffAI(aiToggle);
     else {
@@ -1365,7 +1398,7 @@ document.addEventListener("click", (event) => {
   if (clearAIButton) clearAISettings(clearAIButton);
   if (replayAITourButton) {
     closeSheet();
-    requestAnimationFrame(() => startTour("ai"));
+    requestAnimationFrame(() => startTour(aiEnabled() ? "ai" : "sources", true));
   }
   if (assetButton) {
     selectAsset(assetButton.dataset.asset);
@@ -1458,7 +1491,7 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") finishTour(true);
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      state.tourIndex === tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
+      state.tourIndex === state.tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
     }
     if (event.key === "ArrowLeft") {
       event.preventDefault();

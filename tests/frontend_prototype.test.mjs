@@ -104,6 +104,16 @@ test("visitor AI settings preserve the current interaction style", () => {
   assert.doesNotMatch(styles, /\.brand span:last-child\s*\{\s*display:\s*none/);
 });
 
+test("onboarding explains source mode and the first AI enablement", () => {
+  assert.ok(app.includes("sourceTourSteps"));
+  assert.ok(app.includes("aiTourSteps"));
+  assert.ok(app.includes("SOURCE_TOUR_KEY"));
+  assert.ok(app.includes("AI_TOUR_KEY"));
+  assert.ok(app.includes("打开 AI 设置"));
+  assert.ok(app.includes('startTour("ai"'));
+  assert.doesNotMatch(app, /tradingbuddy-tour-complete-v1/);
+});
+
 test("AI-off importance details cannot expose thesis-draft actions", () => {
   assert.match(importanceDetail, /aiEnabled/);
   assert.match(app, /dailyImportanceSheet\(body, \{ sheetHeader, escapeHtml, aiEnabled \}\)/);
@@ -244,7 +254,6 @@ test("runtime asset switches invalidate out-of-order views and load the selected
   const storage = new TestStorage();
   storage.setItem("tradingbuddy.tour.sources.v2", "true");
   storage.setItem("tradingbuddy.tour.ai.v1", "true");
-  storage.setItem("tradingbuddy-tour-complete-v1", "true");
   storage.setItem("tradingbuddy.ai.config.v1", JSON.stringify({ enabled: true, apiKey: "test-key", model: "test-model", baseUrl: "" }));
   storage.setItem("tradingbuddy.ai.workspace.v1", JSON.stringify({ assets: {
     1: { messages: [{ role: "assistant", content: "old-a" }], analyses: [] },
