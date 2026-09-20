@@ -987,6 +987,11 @@ a.source-chip { display: inline-flex; align-items: center; }
   position: fixed;
   z-index: 103;
   width: min(324px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 18px;
   border: 1px solid rgba(255,255,255,.82);
   border-radius: 18px;

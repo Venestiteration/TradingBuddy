@@ -1228,7 +1228,9 @@ function positionTour() {
   const spacing = 18;
   const canPlaceBelow = bottom + spacing + bubbleHeight <= window.innerHeight - edge;
   const placement = canPlaceBelow ? "bottom" : "top";
-  const bubbleTop = canPlaceBelow ? bottom + spacing : Math.max(edge, top - spacing - bubbleHeight);
+  const preferredTop = canPlaceBelow ? bottom + spacing : top - spacing - bubbleHeight;
+  const maxBubbleTop = Math.max(edge, window.innerHeight - bubbleHeight - edge);
+  const bubbleTop = Math.max(edge, Math.min(preferredTop, maxBubbleTop));
   const idealLeft = left + (right - left) / 2 - bubbleWidth / 2;
   const bubbleLeft = Math.max(edge, Math.min(idealLeft, window.innerWidth - bubbleWidth - edge));
   const arrowLeft = Math.max(26, Math.min(left + (right - left) / 2 - bubbleLeft, bubbleWidth - 26));
@@ -1249,7 +1251,7 @@ function showTourStep(index) {
   }
   const rect = target.getBoundingClientRect();
   if ((rect.top < 8 || rect.bottom > window.innerHeight - 8) && !target.closest(".topbar") && !target.closest(".composer-dock")) {
-    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.scrollIntoView({ block: "center", behavior: "auto" });
   }
   renderTourPopover();
   requestAnimationFrame(() => {
@@ -1286,8 +1288,7 @@ function startTour(kind = aiEnabled() ? "ai" : "sources", force = false) {
   renderTourPopover();
   requestAnimationFrame(() => {
     els.tourLayer.classList.add("is-active");
-    positionTour();
-    els.tourPopover.querySelector("[data-tour-next]")?.focus();
+    showTourStep(0);
   });
 }
 

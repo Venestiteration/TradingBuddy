@@ -513,6 +513,142 @@ test("keyboard final source-tour actions open settings and restore focus to the 
   }
 });
 
+test("AI tour scrolls the first analysis action into the visible workspace", async () => {
+  const previousDocument = globalThis.document;
+  const previousFetch = globalThis.fetch;
+  const previousLocalStorage = globalThis.localStorage;
+  const previousHTMLElement = globalThis.HTMLElement;
+  const previousWindow = globalThis.window;
+  const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+
+  class FakeElement {
+    constructor(name, rect = { left: 100, top: 100, right: 180, bottom: 140, width: 80, height: 40 }) {
+      this.name = name;
+      this.rect = rect;
+      this.dataset = {};
+      this.classList = {
+        values: new Set(),
+        add: (...names) => names.forEach((value) => this.classList.values.add(value)),
+        remove: (...names) => names.forEach((value) => this.classList.values.delete(value)),
+        toggle: (name, force) => {
+          const next = force === undefined ? !this.classList.values.has(name) : force;
+          if (next) this.classList.values.add(name);
+          else this.classList.values.delete(name);
+          return next;
+        },
+      };
+      this.style = { setProperty() {} };
+      this.isConnected = true;
+      this.hidden = false;
+      this.innerHTML = "";
+      this.scrollIntoViewCalls = [];
+    }
+
+    addEventListener() {}
+    setAttribute() {}
+    querySelector(selector) {
+      if (this.name === "tour-popover" && selector === "[data-tour-next]") return elements.get("tour-next");
+      return null;
+    }
+    querySelectorAll() { return []; }
+    scrollTo() {}
+    focus() { documentStub.activeElement = this; }
+    closest() { return null; }
+    getBoundingClientRect() { return this.rect; }
+    scrollIntoView(options) { this.scrollIntoViewCalls.push(options); }
+  }
+
+  class TestStorage {
+    constructor() {
+      this.values = new Map([
+        ["tradingbuddy.ai.config.v1", JSON.stringify({ enabled: true, apiKey: "test-key", model: "test-model", baseUrl: "" })],
+        ["tradingbuddy.tour.sources.v2", "true"],
+      ]);
+    }
+
+    getItem(key) { return this.values.get(key) ?? null; }
+    setItem(key, value) { this.values.set(key, String(value)); }
+    removeItem(key) { this.values.delete(key); }
+  }
+
+  const elements = new Map();
+  const addElement = (name, ...selectors) => {
+    const element = new FakeElement(name);
+    elements.set(name, element);
+    selectors.forEach((selector) => elements.set(selector, element));
+    return element;
+  };
+  addElement("app-shell", ".app-shell");
+  addElement("conversation", "#conversation");
+  addElement("conversation-scroll", ".conversation-scroll");
+  addElement("asset-switcher", "#asset-switcher", '[data-tour="asset"]');
+  addElement("asset-switcher-label", "#asset-switcher-label");
+  addElement("asset-popover", "#asset-popover");
+  addElement("composer-dock", "#composer-dock");
+  addElement("composer", "#composer", '[data-tour="composer"]');
+  addElement("prompt-input", "#composer textarea");
+  addElement("send-button", "#composer .send-button");
+  addElement("sheet", "#detail-sheet");
+  addElement("toast", "#toast");
+  addElement("tour-layer", "#tour-layer");
+  addElement("tour-popover", "#tour-popover");
+  addElement("tour-focus-ring", "#tour-focus-ring");
+  addElement("tour-blocker", "#tour-blocker");
+  addElement("start-tour", "[data-start-tour]");
+  addElement("tour-mask-top", ".tour-mask-top");
+  addElement("tour-mask-left", ".tour-mask-left");
+  addElement("tour-mask-right", ".tour-mask-right");
+  addElement("tour-mask-bottom", ".tour-mask-bottom");
+  const runAnalysis = addElement("run-analysis", '[data-action="run-analysis"]');
+  runAnalysis.rect = { left: 100, top: 900, right: 220, bottom: 940, width: 120, height: 40 };
+  addElement("tour-next", "[data-tour-next]");
+
+  const listeners = new Map();
+  const documentStub = {
+    body: { dataset: { apiRoot: "/api" } },
+    activeElement: null,
+    querySelector: (selector) => elements.get(selector) || null,
+    addEventListener: (type, handler) => listeners.set(type, handler),
+  };
+  const dispatch = (type, event) => listeners.get(type)?.(event);
+  const clickTarget = (matches) => ({ closest: (selector) => matches.has(selector) ? elements.get(selector) : null });
+
+  globalThis.document = documentStub;
+  globalThis.fetch = async (url) => {
+    assert.equal(url, "/api/assets");
+    return { ok: true, status: 200, text: async () => JSON.stringify({ assets: [] }) };
+  };
+  globalThis.localStorage = new TestStorage();
+  globalThis.HTMLElement = FakeElement;
+  globalThis.window = { innerWidth: 390, innerHeight: 844, addEventListener() {} };
+  globalThis.requestAnimationFrame = (callback) => callback();
+
+  try {
+    await import(`../frontend/app.js?ai-tour-scroll=${Date.now()}-${Math.random()}`);
+    await new Promise((resolve) => setImmediate(resolve));
+    dispatch("click", { target: clickTarget(new Set(["[data-start-tour]"])) });
+
+    assert.equal(runAnalysis.scrollIntoViewCalls.length, 1);
+    assert.equal(runAnalysis.scrollIntoViewCalls[0].block, "center");
+    assert.equal(runAnalysis.scrollIntoViewCalls[0].behavior, "auto");
+    assert.ok(Number.parseInt(elements.get("tour-popover").style.top, 10) <= 804);
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
+    if (previousHTMLElement === undefined) delete globalThis.HTMLElement;
+    else globalThis.HTMLElement = previousHTMLElement;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousRequestAnimationFrame;
+  }
+});
+
 test("AI and overview work use the view generation guard", () => {
   assert.ok(app.includes("viewGeneration"));
   assert.ok(app.includes("applyIfCurrentView"));
