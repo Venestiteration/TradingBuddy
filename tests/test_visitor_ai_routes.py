@@ -69,22 +69,41 @@ class VisitorAIRoutesTest(unittest.TestCase):
         db._schema_ready = self.original_ready
         self.tempdir.cleanup()
 
+    def _ai_counts(self):
+        return {
+            "analyses": db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"],
+            "messages": db.query_one("SELECT COUNT(*) AS count FROM messages")["count"],
+        }
+
+    def _post_chat_with_recent_messages(self, recent_messages):
+        return self.configured_client().post(
+            "/api/chat/stream",
+            json={
+                "asset_id": self.asset_id,
+                "question": "影响是什么？",
+                "recent_messages": recent_messages,
+            },
+            headers=self.headers,
+        )
+
     def test_missing_visitor_config_is_rejected(self):
         response = self.client.post("/api/research/stream", json={"asset_id": self.asset_id, "event_id": "ev-1"})
         self.assertEqual(response.status_code, 400)
 
     @patch("app.routers.research.run_grounded_stream", side_effect=completed_stream)
     def test_research_does_not_persist_analysis(self, mocked):
+        counts_before = self._ai_counts()
         response = self.configured_client().post(
             "/api/research/stream",
             json={"asset_id": self.asset_id, "event_id": "ev-1"},
             headers=self.headers,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"], 0)
+        self.assertEqual(self._ai_counts(), counts_before)
 
     @patch("app.routers.chat.run_grounded_stream", side_effect=completed_stream)
     def test_chat_uses_client_context_without_persistence(self, mocked):
+        counts_before = self._ai_counts()
         response = self.configured_client().post(
             "/api/chat/stream",
             json={
@@ -97,7 +116,31 @@ class VisitorAIRoutesTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(mocked.call_args.kwargs["recent_messages"], [{"role": "user", "content": "上一问"}])
-        self.assertEqual(db.query_one("SELECT COUNT(*) AS count FROM messages")["count"], 0)
+        self.assertEqual(self._ai_counts(), counts_before)
+
+    def test_recent_messages_rejects_more_than_six_items(self):
+        response = self._post_chat_with_recent_messages([
+            {"role": "user", "content": str(index)} for index in range(7)
+        ])
+        self.assertEqual(response.status_code, 422)
+
+    def test_recent_messages_rejects_invalid_role(self):
+        response = self._post_chat_with_recent_messages([
+            {"role": "system", "content": "不支持的角色"},
+        ])
+        self.assertEqual(response.status_code, 422)
+
+    def test_recent_messages_rejects_empty_content(self):
+        response = self._post_chat_with_recent_messages([
+            {"role": "user", "content": ""},
+        ])
+        self.assertEqual(response.status_code, 422)
+
+    def test_recent_messages_rejects_content_over_2000_characters(self):
+        response = self._post_chat_with_recent_messages([
+            {"role": "assistant", "content": "x" * 2001},
+        ])
+        self.assertEqual(response.status_code, 422)
 
     def test_overview_omits_shared_ai_history_and_health_reports_capability(self):
         health = self.client.get("/api/health").json()
