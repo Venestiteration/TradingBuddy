@@ -11,6 +11,20 @@ from .routers import assets, chat, importance, research, theses
 
 def create_app() -> FastAPI:
     app = FastAPI(title="AI 投研助手 MVP", version="0.1.0")
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'self'; frame-ancestors 'none'"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        return response
+
     init_db()
     # 先注册 API 路由，再托管前端静态文件，保证 /api 优先匹配。
     app.include_router(assets.router)
