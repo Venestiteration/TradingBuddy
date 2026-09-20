@@ -91,7 +91,9 @@ export function aiHeaders(config) {
 function loadWorkspace(storage) {
   const target = storage || browserStorage();
   const value = parse(safeGet(target, AI_WORKSPACE_KEY), { assets: {} });
-  return value && typeof value.assets === "object" ? value : { assets: {} };
+  return value && typeof value.assets === "object" && value.assets !== null && !Array.isArray(value.assets)
+    ? value
+    : { assets: {} };
 }
 
 export function loadAssetAI(assetId, storage = null) {

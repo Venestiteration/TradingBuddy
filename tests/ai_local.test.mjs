@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   AI_CONFIG_KEY,
+  AI_WORKSPACE_KEY,
   aiHeaders,
   clearAIData,
   disableAI,
@@ -61,6 +62,20 @@ test("workspace is isolated by asset and capped", () => {
   assert.equal(loadAssetAI(1, storage).messages.length, 50);
   assert.equal(loadAssetAI(1, storage).analyses.length, 20);
   assert.equal(loadAssetAI(2, storage).messages.length, 2);
+});
+
+test("null workspace assets fall back to an empty workspace", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(AI_WORKSPACE_KEY, JSON.stringify({ assets: null }));
+  assert.deepEqual(loadAssetAI(1, storage), { messages: [], analyses: [] });
+});
+
+test("array workspace assets fall back to an empty workspace", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(AI_WORKSPACE_KEY, JSON.stringify({
+    assets: [{ messages: [{ role: "assistant", content: "unexpected" }] }],
+  }));
+  assert.deepEqual(loadAssetAI(0, storage), { messages: [], analyses: [] });
 });
 
 test("blocked browser storage keeps AI off and reports an actionable error", () => {
