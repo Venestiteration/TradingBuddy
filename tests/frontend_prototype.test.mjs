@@ -112,6 +112,8 @@ test("onboarding explains source mode and the first AI enablement", () => {
   assert.ok(app.includes("打开 AI 设置"));
   assert.ok(app.includes('startTour("ai"'));
   assert.doesNotMatch(app, /tradingbuddy-tour-complete-v1/);
+  assert.match(app, /requestAnimationFrame\(\(\) => setTimeout\(\(\) => startTour\(\), 260\)/);
+  assert.doesNotMatch(app, /requestAnimationFrame\(\(\) => setTimeout\(\(\) => startTour\(false\), 260\)/);
 });
 
 test("AI-off importance details cannot expose thesis-draft actions", () => {

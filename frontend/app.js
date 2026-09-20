@@ -1526,7 +1526,7 @@ function initializeLocalMode() {
 }
 
 initializeLocalMode().then(() => {
-  requestAnimationFrame(() => setTimeout(() => startTour(false), 260));
+  requestAnimationFrame(() => setTimeout(() => startTour(), 260));
 }).catch((error) => {
   els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>启动失败</div><h1>研究工作区暂时无法加载。</h1><p class="error-callout message-error">${escapeHtml(error.message)}</p></article>`;
 });
