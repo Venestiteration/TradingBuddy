@@ -494,9 +494,11 @@ function sheetHeader(title, context = "", back = false) {
   `;
 }
 
-function archiveSheet(tab = state.archiveTab) {
-  const tabs = aiEnabled() ? ["thesis", "data", "inferences", "sources"] : ["data", "sources"];
-  if (!tabs.includes(tab)) tab = "data";
+function archiveSheet(tab = null) {
+  const tabs = aiEnabled() ? ["thesis", "data", "inferences", "sources"] : ["thesis", "data", "sources"];
+  const requestedTab = tab || state.archiveTab;
+  const defaultTab = !tab && !aiEnabled() && requestedTab === "thesis" ? "data" : requestedTab;
+  tab = tabs.includes(defaultTab) ? defaultTab : "data";
   state.archiveTab = tab;
   const thesis = state.overview?.thesis;
   const result = aiEnabled() ? state.analysis : null;
@@ -566,6 +568,10 @@ async function openThesisContext(trigger) {
 }
 
 async function addImportanceDayToThesis(date, trigger) {
+  if (!aiEnabled()) {
+    showToast("请先配置并启用 AI 分析", "error");
+    return;
+  }
   if (!state.assetId) return;
   try {
     const [context, day] = await Promise.all([
@@ -694,6 +700,19 @@ function settingsSheet() {
   return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section ai-settings" id="ai-settings"><div class="setting-row"><div class="setting-copy"><strong>AI 分析</strong><span>使用你自己的模型密钥生成分析和继续追问</span></div><button class="switch pressable" type="button" role="switch" data-ai-toggle aria-checked="${aiEnabled()}" aria-label="${aiEnabled() ? "关闭 AI 分析" : "启用 AI 分析"}"></button></div><p class="local-privacy-note">配置和分析结果仅保存在当前浏览器。</p><form id="ai-settings-form" class="sheet-form ai-settings-form"${aiFormHidden}><label>API Key<div class="secret-field"><input name="api_key" type="password" autocomplete="off" value="${escapeHtml(state.aiConfig.apiKey)}" required><button type="button" class="text-button pressable" data-toggle-api-key>显示</button></div></label><label>模型名称<input name="model" placeholder="例如 gpt-4.1-mini 或 glm-4-flash" value="${escapeHtml(state.aiConfig.model)}" required></label><label>API 地址（选填）<input name="base_url" inputmode="url" placeholder="留空使用 OpenAI 官方接口" value="${escapeHtml(state.aiConfig.baseUrl)}"></label><div class="button-row"><button class="primary-button pressable" type="submit">保存并启用</button></div></form><div class="button-row"><button class="secondary-button pressable" type="button" data-replay-ai-tour>重新查看 AI 使用说明</button><button class="text-button danger pressable" type="button" data-clear-ai>清除本地 AI 配置</button></div></section></div>`;
 }
 
+function captureSheetFocus(element) {
+  if (!element) return null;
+  for (const attribute of ["data-ai-toggle", "data-clear-ai", "data-toggle-api-key", "data-replay-ai-tour"]) {
+    if (element.matches?.(`[${attribute}]`)) return `[${attribute}]`;
+  }
+  return element.id ? `#${element.id}` : null;
+}
+
+function restoreSheetFocus(selector) {
+  if (!selector) return;
+  requestAnimationFrame(() => els.sheet.querySelector(selector)?.focus());
+}
+
 function saveAISettings(form) {
   const values = Object.fromEntries(new FormData(form).entries());
   try {
@@ -715,13 +734,15 @@ function saveAISettings(form) {
   }
 }
 
-function turnOffAI() {
+function turnOffAI(trigger = null) {
+  const focusTarget = captureSheetFocus(trigger);
   try {
     disableAI();
     state.aiConfig = loadAIConfig();
     state.analysis = null;
     syncAIMode();
     renderSheet();
+    restoreSheetFocus(focusTarget);
     renderConversation();
     showToast("AI 分析已关闭");
   } catch (error) {
@@ -729,7 +750,8 @@ function turnOffAI() {
   }
 }
 
-function clearAISettings() {
+function clearAISettings(trigger = null) {
+  const focusTarget = captureSheetFocus(trigger);
   const confirmed = window.confirm("将删除本浏览器中的 API Key、模型配置和全部 AI 分析记录。继续吗？");
   if (!confirmed) return;
   try {
@@ -741,6 +763,7 @@ function clearAISettings() {
     state.aiSettingsExpanded = false;
     syncAIMode();
     renderSheet();
+    restoreSheetFocus(focusTarget);
     renderConversation();
     showToast("本地 AI 配置已清除");
   } catch (error) {
@@ -751,7 +774,7 @@ function clearAISettings() {
 function renderSheet() {
   if (!state.sheetView) return;
   const view = state.sheetView;
-  if (view.type === "archive") els.sheet.innerHTML = archiveSheet(view.tab || state.archiveTab);
+  if (view.type === "archive") els.sheet.innerHTML = archiveSheet(view.tab);
   if (view.type === "trace") els.sheet.innerHTML = traceSheet();
   if (view.type === "metric") els.sheet.innerHTML = metricSheet(view.metricKey);
   if (view.type === "source") els.sheet.innerHTML = sourceSheet(view.sourceId);
@@ -805,7 +828,7 @@ async function loadImportanceDay(date) {
     const body = await api(`/assets/${state.assetId}/importance/${encodeURIComponent(date)}`);
     if (state.sheetView?.type === "importanceDay" && state.sheetView.date === date) {
       state.sheetData = body;
-      els.sheet.innerHTML = dailyImportanceSheet(body, { sheetHeader, escapeHtml });
+      els.sheet.innerHTML = dailyImportanceSheet(body, { sheetHeader, escapeHtml, aiEnabled });
     }
   } catch (error) {
     showToast(error.message, "error");
@@ -1323,10 +1346,12 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-tour-prev]")) showTourStep(state.tourIndex - 1);
   if (event.target.closest("[data-tour-next]")) state.tourIndex === tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
   if (aiToggle) {
-    if (aiEnabled()) turnOffAI();
+    if (aiEnabled()) turnOffAI(aiToggle);
     else {
+      const focusTarget = captureSheetFocus(aiToggle);
       state.aiSettingsExpanded = true;
       renderSheet();
+      restoreSheetFocus(focusTarget);
     }
   }
   if (apiKeyToggle) {
@@ -1337,7 +1362,7 @@ document.addEventListener("click", (event) => {
       apiKeyToggle.textContent = visible ? "显示" : "隐藏";
     }
   }
-  if (clearAIButton) clearAISettings();
+  if (clearAIButton) clearAISettings(clearAIButton);
   if (replayAITourButton) {
     closeSheet();
     requestAnimationFrame(() => startTour("ai"));
@@ -1366,7 +1391,7 @@ document.addEventListener("click", (event) => {
     state.sheetView = { type: "thesisHistory" };
     renderSheet();
   }
-  if (event.target.closest("[data-add-day-to-thesis]")) {
+  if (aiEnabled() && event.target.closest("[data-add-day-to-thesis]")) {
     const button = event.target.closest("[data-add-day-to-thesis]");
     addImportanceDayToThesis(button.dataset.addDayToThesis, button);
   }

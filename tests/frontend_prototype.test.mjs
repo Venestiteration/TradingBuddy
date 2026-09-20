@@ -104,6 +104,26 @@ test("visitor AI settings preserve the current interaction style", () => {
   assert.doesNotMatch(styles, /\.brand span:last-child\s*\{\s*display:\s*none/);
 });
 
+test("AI-off importance details cannot expose thesis-draft actions", () => {
+  assert.match(importanceDetail, /aiEnabled/);
+  assert.match(app, /dailyImportanceSheet\(body, \{ sheetHeader, escapeHtml, aiEnabled \}\)/);
+  assert.match(app, /function addImportanceDayToThesis\(date, trigger\) \{[\s\S]*if \(!aiEnabled\(\)\)/);
+});
+
+test("AI-off archive keeps the manual thesis path while defaulting to data", () => {
+  assert.match(app, /const tabs = aiEnabled\(\) \? \["thesis", "data", "inferences", "sources"\] : \["thesis", "data", "sources"\]/);
+  assert.match(app, /function archiveSheet\(tab = null\)/);
+  assert.match(app, /if \(view\.type === "archive"\) els\.sheet\.innerHTML = archiveSheet\(view\.tab\)/);
+});
+
+test("settings sheet rerenders restore focus to the triggering control", () => {
+  assert.match(app, /function captureSheetFocus/);
+  assert.match(app, /function restoreSheetFocus/);
+  assert.match(app, /turnOffAI\(aiToggle\)/);
+  assert.match(app, /clearAISettings\(clearAIButton\)/);
+  assert.match(app, /restoreSheetFocus\(focusTarget\)/);
+});
+
 test("AI SSE failures do not announce a successful response", () => {
   assert.match(app, /if \(completed\) \{\s*applyIfCurrentView\(state, view, \(\) => \{\s*loadLocalAIState\(\);/);
   assert.match(app, /if \(completedResult\) \{\s*applyIfCurrentView\(state, view, \(\) => \{\s*loadLocalAIState\(\);/);
