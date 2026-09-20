@@ -13,6 +13,7 @@ class SecurityHeadersTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             content_security_policy = response.headers["content-security-policy"]
             for directive in (
+                "default-src 'self'",
                 "script-src 'self'",
                 "style-src 'self' 'unsafe-inline'",
                 "img-src 'self' data:",
