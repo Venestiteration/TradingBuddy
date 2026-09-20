@@ -73,6 +73,7 @@ const els = {
   assetSwitcher: $("#asset-switcher"),
   assetSwitcherLabel: $("#asset-switcher-label"),
   assetPopover: $("#asset-popover"),
+  composerDock: $("#composer-dock"),
   composer: $("#composer"),
   promptInput: $("#composer textarea"),
   sendButton: $("#composer .send-button"),
@@ -89,6 +90,13 @@ const els = {
     bottom: $(".tour-mask-bottom"),
   },
 };
+
+const aiEnabled = () => state.aiConfig.enabled === true;
+
+function syncAIMode() {
+  els.composerDock.hidden = !aiEnabled();
+  els.appShell.classList.toggle("ai-disabled", !aiEnabled());
+}
 
 const tourSteps = [
   { target: '[data-tour="asset"]', title: "选择标的", body: "这里只显示你的持仓和自选。点击可切换当前研究标的。" },
@@ -259,7 +267,7 @@ function eventFreshness(event) {
 
 function renderEventPush(event, index) {
   const unread = !state.readEvents.has(event.event_id);
-  const selected = event.event_id === state.selectedEventId;
+  const selected = aiEnabled() && event.event_id === state.selectedEventId;
   return `
     <article class="push-message ${selected ? "selected-push" : ""}" data-push-id="${escapeHtml(event.event_id)}">
       <div class="push-meta">${unread ? '<i class="unread-dot" aria-label="未读"></i>' : ""}<span>${escapeHtml(eventSourceLabel(event))}</span><span>·</span><span>${escapeHtml(formatDate(event.published_at))}</span><span class="push-priority">${escapeHtml(eventFreshness(event))}</span></div>
@@ -267,7 +275,7 @@ function renderEventPush(event, index) {
       <p class="push-summary">${escapeHtml(event.excerpt || "当前仅有标题，无法核验正文细节。")}</p>
       <p class="push-reason"><strong>为什么保留：</strong>${event.source_level === "primary" ? "一级来源优先进入研究范围。" : "作为公开线索保留，不能单独推出原因结论。"}</p>
       <div class="message-actions">
-        <button class="prompt-chip pressable" type="button" data-action="select-event" data-event-id="${escapeHtml(event.event_id)}">${selected ? "已选择分析" : "选择分析"}</button>
+        ${aiEnabled() ? `<button class="prompt-chip pressable" type="button" data-action="select-event" data-event-id="${escapeHtml(event.event_id)}">${selected ? "已选择分析" : "选择分析"}</button>` : ""}
         <button class="text-button pressable" type="button" data-source-id="${escapeHtml(event.event_id)}">查看来源</button>
       </div>
     </article>
@@ -305,24 +313,31 @@ function renderContextLine(asset, event) {
 }
 
 function renderDynamicMessage(asset, event) {
-  const result = state.analysis;
-  const status = result ? impactLabel(result) : event ? "信息待核验" : "暂无动态";
-  const statusClass = result ? impactClass(result) : "uncertain";
+  const enabled = aiEnabled();
+  const result = enabled ? state.analysis : null;
+  const status = enabled ? (result ? impactLabel(result) : event ? "信息待核验" : "暂无动态") : "信息源已收集";
+  const statusClass = enabled ? (result ? impactClass(result) : "uncertain") : "support";
   const headline = event?.title || "今天暂时没有需要解释的新动态";
   const lede = event?.excerpt || "当前没有可确认的事件。你可以先查看行情，或在研究档案中保存自己的判断。";
   const promptList = ["这条动态影响我的判断吗？", "只说已知事实", "还有哪些信息要核验？"];
+  const conclusion = enabled
+    ? `<div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span><span>相对于研究档案中的判断</span></div><button class="detail-link pressable" type="button" data-trace="primary">详情</button></div>`
+    : `<div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span></div></div>`;
+  const actions = enabled
+    ? `<div class="message-actions" data-tour="actions">
+        ${promptList.map((prompt) => `<button class="prompt-chip pressable" type="button" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}
+        ${result ? '<button class="text-button pressable" type="button" data-analysis-toggle="latest" aria-expanded="false">展开分析</button>' : event ? '<button class="text-button pressable" type="button" data-action="run-analysis">生成分析</button>' : ""}
+      </div>`
+    : "";
   return `
     <article class="message assistant" data-tour="thesis">
       <div data-tour="dynamic">
         <div class="assistant-kicker"><span class="status-dot ${statusClass}"></span>今日最重要的变化 · ${event ? escapeHtml(eventSourceLabel(event)) : "数据状态"}</div>
         <h1>${escapeHtml(headline)}</h1>
         <p class="lede">${escapeHtml(lede)}</p>
-        <div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span><span>相对于研究档案中的判断</span></div><button class="detail-link pressable" type="button" data-trace="primary">详情</button></div>
+        ${conclusion}
       </div>
-      <div class="message-actions" data-tour="actions">
-        ${promptList.map((prompt) => `<button class="prompt-chip pressable" type="button" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}
-        ${result ? '<button class="text-button pressable" type="button" data-analysis-toggle="latest" aria-expanded="false">展开分析</button>' : event ? '<button class="text-button pressable" type="button" data-action="run-analysis">生成分析</button>' : ""}
-      </div>
+      ${actions}
       ${result ? `<div class="analysis" data-analysis="latest" hidden><p class="analysis-conclusion">${escapeHtml(result.conclusion || "未形成结论")}</p>${analysisMarkup(result)}</div>` : ""}
       <div class="source-line"><span>${state.overview?.events?.length || 0} 个来源</span><span>·</span><button type="button" data-archive-tab="sources">查看来源记录</button></div>
     </article>
@@ -354,8 +369,7 @@ function renderConversation() {
       + renderImportanceChart(state.importanceRows, { escapeHtml })
       + renderDynamicMessage(asset, state.overview?.events?.[0])
       + (state.pending.question ? `<article class="message user"><div class="user-message">${escapeHtml(state.pending.question)}</div></article>` : "")
-      + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`
-      + renderThesisDraftBanner();
+      + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`;
     bindImportance();
     return;
   }
@@ -363,13 +377,12 @@ function renderConversation() {
   const event = events.find((item) => item.event_id === state.selectedEventId) || events[0] || null;
   if (event) state.selectedEventId = event.event_id;
   const olderEvents = event ? events.filter((item) => item.event_id !== event.event_id).slice(0, 8) : [];
-  const messages = state.localMessages;
+  const messages = aiEnabled() ? state.localMessages : [];
   els.conversation.innerHTML = renderContextLine(asset, event)
     + renderImportanceChart(state.importanceRows, { escapeHtml })
     + renderDynamicMessage(asset, event)
     + olderEvents.map(renderEventPush).join("")
-    + messages.map(renderMessage).join("")
-    + renderThesisDraftBanner();
+    + messages.map(renderMessage).join("");
   bindImportance();
 }
 
@@ -482,9 +495,11 @@ function sheetHeader(title, context = "", back = false) {
 }
 
 function archiveSheet(tab = state.archiveTab) {
+  const tabs = aiEnabled() ? ["thesis", "data", "inferences", "sources"] : ["data", "sources"];
+  if (!tabs.includes(tab)) tab = "data";
   state.archiveTab = tab;
   const thesis = state.overview?.thesis;
-  const result = state.analysis;
+  const result = aiEnabled() ? state.analysis : null;
   let panel = "";
   if (tab === "thesis") {
     panel = thesis ? `
@@ -516,7 +531,7 @@ function archiveSheet(tab = state.archiveTab) {
       <section class="source-card"><div class="source-card-head"><div><div class="source-meta"><span>${escapeHtml(eventSourceLabel(event))}</span><span>·</span><span>${escapeHtml(formatDate(event.published_at))}</span></div><h3><button class="text-button pressable" type="button" data-source-id="${escapeHtml(event.event_id)}">${escapeHtml(event.title)}</button></h3></div><span class="source-state ${event.content_status === "title_only" ? "offline" : ""}">${escapeHtml(eventFreshness(event))}</span></div><p class="source-related">${escapeHtml(event.excerpt || "当前无正文摘录。")}</p></section>
     `).join("") : '<div class="uncertainty-callout"><strong>暂无已保存来源</strong><p>刷新数据后，公开事件会出现在这里。</p></div>';
   }
-  return `${sheetHeader("研究档案", selectedAsset()?.stock_code || "")}<div class="sheet-body"><div class="archive-tabs">${["thesis", "data", "inferences", "sources"].map((item) => `<button class="archive-tab pressable" type="button" data-archive-tab="${item}" aria-selected="${tab === item}">${item === "thesis" ? "判断" : item === "data" ? "数据" : item === "inferences" ? "推断" : "来源"}</button>`).join("")}</div><div class="archive-panel">${panel}</div></div>`;
+  return `${sheetHeader("研究档案", selectedAsset()?.stock_code || "")}<div class="sheet-body"><div class="archive-tabs">${tabs.map((item) => `<button class="archive-tab pressable" type="button" data-archive-tab="${item}" aria-selected="${tab === item}">${item === "thesis" ? "判断" : item === "data" ? "数据" : item === "inferences" ? "推断" : "来源"}</button>`).join("")}</div><div class="archive-panel">${panel}</div></div>`;
 }
 
 function traceSheet() {
@@ -675,7 +690,62 @@ function addAssetSheet() {
 
 function settingsSheet() {
   const configured = Boolean(state.overview && state.overview.fetched_at);
-  return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section"><span class="detail-eyebrow">AI 配置</span><p>模型配置保存在仓库根目录的 .env 中。API Key 不在页面展示，也不会写入仓库。</p></section></div>`;
+  const aiFormHidden = aiEnabled() || state.aiSettingsExpanded ? "" : " hidden";
+  return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section ai-settings" id="ai-settings"><div class="setting-row"><div class="setting-copy"><strong>AI 分析</strong><span>使用你自己的模型密钥生成分析和继续追问</span></div><button class="switch pressable" type="button" role="switch" data-ai-toggle aria-checked="${aiEnabled()}" aria-label="${aiEnabled() ? "关闭 AI 分析" : "启用 AI 分析"}"></button></div><p class="local-privacy-note">配置和分析结果仅保存在当前浏览器。</p><form id="ai-settings-form" class="sheet-form ai-settings-form"${aiFormHidden}><label>API Key<div class="secret-field"><input name="api_key" type="password" autocomplete="off" value="${escapeHtml(state.aiConfig.apiKey)}" required><button type="button" class="text-button pressable" data-toggle-api-key>显示</button></div></label><label>模型名称<input name="model" placeholder="例如 gpt-4.1-mini 或 glm-4-flash" value="${escapeHtml(state.aiConfig.model)}" required></label><label>API 地址（选填）<input name="base_url" inputmode="url" placeholder="留空使用 OpenAI 官方接口" value="${escapeHtml(state.aiConfig.baseUrl)}"></label><div class="button-row"><button class="primary-button pressable" type="submit">保存并启用</button></div></form><div class="button-row"><button class="secondary-button pressable" type="button" data-replay-ai-tour>重新查看 AI 使用说明</button><button class="text-button danger pressable" type="button" data-clear-ai>清除本地 AI 配置</button></div></section></div>`;
+}
+
+function saveAISettings(form) {
+  const values = Object.fromEntries(new FormData(form).entries());
+  try {
+    state.aiConfig = saveAIConfig({
+      enabled: true,
+      apiKey: values.api_key,
+      model: values.model,
+      baseUrl: values.base_url,
+    });
+    state.aiSettingsExpanded = false;
+    loadLocalAIState();
+    syncAIMode();
+    closeSheet();
+    renderConversation();
+    showToast("AI 分析已启用", "success");
+    requestAnimationFrame(() => startTour("ai"));
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function turnOffAI() {
+  try {
+    disableAI();
+    state.aiConfig = loadAIConfig();
+    state.analysis = null;
+    syncAIMode();
+    renderSheet();
+    renderConversation();
+    showToast("AI 分析已关闭");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function clearAISettings() {
+  const confirmed = window.confirm("将删除本浏览器中的 API Key、模型配置和全部 AI 分析记录。继续吗？");
+  if (!confirmed) return;
+  try {
+    clearAIData();
+    state.aiConfig = loadAIConfig();
+    state.localMessages = [];
+    state.localAnalyses = [];
+    state.analysis = null;
+    state.aiSettingsExpanded = false;
+    syncAIMode();
+    renderSheet();
+    renderConversation();
+    showToast("本地 AI 配置已清除");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function renderSheet() {
@@ -850,6 +920,12 @@ async function stream(path, payload, onEvent) {
 }
 
 async function runAnalysis() {
+  if (!aiEnabled()) {
+    state.aiSettingsExpanded = true;
+    openSheet("settings");
+    showToast("请先配置并启用 AI 分析", "error");
+    return;
+  }
   if (!state.assetId || !state.selectedEventId || state.busy) return;
   const assetId = state.assetId;
   const view = captureView(state);
@@ -890,6 +966,12 @@ async function runAnalysis() {
 }
 
 async function runChat(question) {
+  if (!aiEnabled()) {
+    state.aiSettingsExpanded = true;
+    openSheet("settings");
+    showToast("请先配置并启用 AI 分析", "error");
+    return;
+  }
   if (!state.assetId || state.busy || !question.trim()) return;
   const assetId = state.assetId;
   const view = captureView(state);
@@ -1231,11 +1313,35 @@ document.addEventListener("click", (event) => {
   const sourceLink = event.target.closest("[data-source-id]");
   const periodButton = event.target.closest("[data-chart-period]");
   const action = event.target.closest("[data-action]");
+  const aiToggle = event.target.closest("[data-ai-toggle]");
+  const apiKeyToggle = event.target.closest("[data-toggle-api-key]");
+  const clearAIButton = event.target.closest("[data-clear-ai]");
+  const replayAITourButton = event.target.closest("[data-replay-ai-tour]");
 
   if (event.target.closest("[data-start-tour]")) startTour(true);
   if (event.target.closest("[data-tour-skip]")) finishTour(true);
   if (event.target.closest("[data-tour-prev]")) showTourStep(state.tourIndex - 1);
   if (event.target.closest("[data-tour-next]")) state.tourIndex === tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
+  if (aiToggle) {
+    if (aiEnabled()) turnOffAI();
+    else {
+      state.aiSettingsExpanded = true;
+      renderSheet();
+    }
+  }
+  if (apiKeyToggle) {
+    const input = apiKeyToggle.closest(".secret-field")?.querySelector("input[name=api_key]");
+    if (input) {
+      const visible = input.type === "text";
+      input.type = visible ? "password" : "text";
+      apiKeyToggle.textContent = visible ? "显示" : "隐藏";
+    }
+  }
+  if (clearAIButton) clearAISettings();
+  if (replayAITourButton) {
+    closeSheet();
+    requestAnimationFrame(() => startTour("ai"));
+  }
   if (assetButton) {
     selectAsset(assetButton.dataset.asset);
     closeAssetPopover();
@@ -1281,8 +1387,10 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-action='select-event']")) {
     state.selectedEventId = event.target.closest("[data-action='select-event']").dataset.eventId;
     state.readEvents.add(state.selectedEventId);
-    loadLocalAIState();
-    renderConversation();
+    if (aiEnabled()) {
+      loadLocalAIState();
+      renderConversation();
+    }
   }
   if (event.target.closest("[data-action='refresh']")) refreshData();
   if (event.target.closest("[data-action='add-search-result']")) addAsset(event.target.closest("[data-action='add-search-result']").dataset.code);
@@ -1306,6 +1414,10 @@ document.addEventListener("submit", (event) => {
   if (event.target.id === "thesis-draft-form") {
     event.preventDefault();
     confirmThesisVersion(event.target);
+  }
+  if (event.target.id === "ai-settings-form") {
+    event.preventDefault();
+    saveAISettings(event.target);
   }
 });
 
@@ -1338,7 +1450,14 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", () => requestAnimationFrame(positionTour));
 els.conversationScroll.addEventListener("scroll", () => requestAnimationFrame(positionTour), { passive: true });
 
-loadAssets().then(() => {
+function initializeLocalMode() {
+  state.aiConfig = loadAIConfig();
+  loadLocalAIState();
+  syncAIMode();
+  return loadAssets();
+}
+
+initializeLocalMode().then(() => {
   requestAnimationFrame(() => setTimeout(() => startTour(false), 260));
 }).catch((error) => {
   els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>启动失败</div><h1>研究工作区暂时无法加载。</h1><p class="error-callout message-error">${escapeHtml(error.message)}</p></article>`;

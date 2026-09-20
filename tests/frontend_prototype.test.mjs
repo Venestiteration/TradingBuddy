@@ -90,6 +90,20 @@ test("AI requests use visitor headers and local results", () => {
   assert.ok(aiLocal.includes("AI_WORKSPACE_KEY"));
 });
 
+test("visitor AI settings preserve the current interaction style", () => {
+  assert.ok(index.includes("<span>TradingBuddy</span>"));
+  assert.ok(index.includes('id="composer-dock"'));
+  assert.ok(index.includes('data-tour="settings"'));
+  assert.ok(app.includes('id="ai-settings-form"'));
+  assert.ok(app.includes('role="switch"'));
+  assert.ok(app.includes("清除本地 AI 配置"));
+  assert.ok(app.includes("配置和分析结果仅保存在当前浏览器"));
+  assert.ok(app.includes("function syncAIMode"));
+  assert.ok(styles.includes(".ai-settings"));
+  assert.ok(styles.includes(".composer-dock[hidden]"));
+  assert.doesNotMatch(styles, /\.brand span:last-child\s*\{\s*display:\s*none/);
+});
+
 test("AI SSE failures do not announce a successful response", () => {
   assert.match(app, /if \(completed\) \{\s*applyIfCurrentView\(state, view, \(\) => \{\s*loadLocalAIState\(\);/);
   assert.match(app, /if \(completedResult\) \{\s*applyIfCurrentView\(state, view, \(\) => \{\s*loadLocalAIState\(\);/);
@@ -196,7 +210,7 @@ test("runtime asset switches invalidate out-of-order views and load the selected
 
   const selectors = [
     ".app-shell", "#conversation", ".conversation-scroll", "#asset-switcher", "#asset-switcher-label",
-    "#asset-popover", "#composer", "#composer textarea", "#composer .send-button", "#detail-sheet", "#toast",
+    "#asset-popover", "#composer-dock", "#composer", "#composer textarea", "#composer .send-button", "#detail-sheet", "#toast",
     "#tour-layer", "#tour-popover", "#tour-focus-ring", "#tour-blocker", ".tour-mask-top", ".tour-mask-left",
     ".tour-mask-right", ".tour-mask-bottom",
   ];
@@ -211,6 +225,7 @@ test("runtime asset switches invalidate out-of-order views and load the selected
   storage.setItem("tradingbuddy.tour.sources.v2", "true");
   storage.setItem("tradingbuddy.tour.ai.v1", "true");
   storage.setItem("tradingbuddy-tour-complete-v1", "true");
+  storage.setItem("tradingbuddy.ai.config.v1", JSON.stringify({ enabled: true, apiKey: "test-key", model: "test-model", baseUrl: "" }));
   storage.setItem("tradingbuddy.ai.workspace.v1", JSON.stringify({ assets: {
     1: { messages: [{ role: "assistant", content: "old-a" }], analyses: [] },
     2: { messages: [{ role: "assistant", content: "new-b" }], analyses: [] },
