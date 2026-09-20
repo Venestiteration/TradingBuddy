@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from dataclasses import dataclass
-from typing import Annotated, Callable
+from typing import Annotated, Callable, Optional
 from urllib.parse import urlparse
 
 from fastapi import Header, HTTPException
@@ -70,8 +70,8 @@ def build_visitor_ai_config(
 
 
 def visitor_ai_config(
-    api_key: Annotated[str | None, Header(alias="X-TB-API-Key")] = None,
-    model: Annotated[str | None, Header(alias="X-TB-Model")] = None,
-    base_url: Annotated[str | None, Header(alias="X-TB-Base-URL")] = None,
+    api_key: Annotated[Optional[str], Header(alias="X-TB-API-Key")] = None,
+    model: Annotated[Optional[str], Header(alias="X-TB-Model")] = None,
+    base_url: Annotated[Optional[str], Header(alias="X-TB-Base-URL")] = None,
 ) -> VisitorAIConfig:
     return build_visitor_ai_config(api_key, model, base_url)
