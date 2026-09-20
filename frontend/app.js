@@ -1303,6 +1303,24 @@ function finishTour(completed = true) {
   }, 190);
 }
 
+function advanceTour() {
+  if (!state.tourActive) return;
+  const step = state.tourSteps[state.tourIndex];
+  const opensAISettings = state.tourKind === "sources" && step?.action === "open-ai-settings";
+  if (state.tourIndex !== state.tourSteps.length - 1) {
+    showTourStep(state.tourIndex + 1);
+    return;
+  }
+  finishTour(true);
+  if (opensAISettings) {
+    state.tourReturnFocus = null;
+    state.aiSettingsExpanded = true;
+    const settingsTrigger = document.querySelector('[data-tour="settings"]');
+    openSheet("settings", settingsTrigger);
+    requestAnimationFrame(() => els.sheet.querySelector("#ai-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+}
+
 function trapTourFocus(event) {
   if (event.key !== "Tab") return;
   const controls = [...els.tourPopover.querySelectorAll("button:not([disabled])")];
@@ -1365,19 +1383,7 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-tour-skip]")) finishTour(true);
   if (event.target.closest("[data-tour-prev]")) showTourStep(state.tourIndex - 1);
   const tourNext = event.target.closest("[data-tour-next]");
-  if (tourNext) {
-    const step = state.tourSteps[state.tourIndex];
-    const opensAISettings = state.tourKind === "sources" && step?.action === "open-ai-settings";
-    if (state.tourIndex === state.tourSteps.length - 1) {
-      finishTour(true);
-      if (opensAISettings) {
-        state.tourReturnFocus = null;
-        state.aiSettingsExpanded = true;
-        openSheet("settings");
-        requestAnimationFrame(() => els.sheet.querySelector("#ai-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }));
-      }
-    } else showTourStep(state.tourIndex + 1);
-  }
+  if (tourNext) advanceTour();
   if (aiToggle) {
     if (aiEnabled()) turnOffAI(aiToggle);
     else {
@@ -1491,7 +1497,11 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") finishTour(true);
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      state.tourIndex === state.tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
+      advanceTour();
+    }
+    if (event.key === "Enter" && event.target === els.tourPopover.querySelector("[data-tour-next]")) {
+      event.preventDefault();
+      advanceTour();
     }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
