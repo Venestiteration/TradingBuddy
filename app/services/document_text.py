@@ -65,24 +65,31 @@ def extract_pdf_bytes(content: bytes) -> dict:
 def _download(client: httpx.Client, url: str) -> bytes:
     current = validate_url(url)
     for _ in range(4):
-        response = client.get(current, timeout=20.0, follow_redirects=False)
-        if response.status_code in {301, 302, 303, 307, 308}:
-            location = response.headers.get("location")
-            if not location:
-                raise DocumentRejected("公告重定向缺少目标地址")
-            current = validate_url(urljoin(current, location))
-            continue
-        response.raise_for_status()
-        try:
-            declared = int(response.headers.get("content-length") or 0)
-        except (TypeError, ValueError) as exc:
-            raise DocumentRejected("公告响应长度无效") from exc
-        if declared > MAX_DOCUMENT_BYTES:
-            raise DocumentRejected("公告文件超过 20 MB")
-        content_type = response.headers.get("content-type", "").split(";", 1)[0]
-        if content_type not in {"application/pdf", "application/octet-stream"}:
-            raise DocumentRejected("公告响应类型不是 PDF")
-        return response.content
+        with client.stream(
+            "GET", current, timeout=20.0, follow_redirects=False
+        ) as response:
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("location")
+                if not location:
+                    raise DocumentRejected("公告重定向缺少目标地址")
+                current = validate_url(urljoin(current, location))
+                continue
+            response.raise_for_status()
+            try:
+                declared = int(response.headers.get("content-length") or 0)
+            except (TypeError, ValueError) as exc:
+                raise DocumentRejected("公告响应长度无效") from exc
+            if declared > MAX_DOCUMENT_BYTES:
+                raise DocumentRejected("公告文件超过 20 MB")
+            content_type = response.headers.get("content-type", "").split(";", 1)[0]
+            if content_type not in {"application/pdf", "application/octet-stream"}:
+                raise DocumentRejected("公告响应类型不是 PDF")
+            content = bytearray()
+            for chunk in response.iter_bytes():
+                if len(content) + len(chunk) > MAX_DOCUMENT_BYTES:
+                    raise DocumentRejected("公告文件超过 20 MB")
+                content.extend(chunk)
+            return bytes(content)
     raise DocumentRejected("公告重定向次数过多")
 
 
@@ -91,7 +98,8 @@ def _primary_announcement(dynamic_id: int) -> dict:
         "SELECT e.evidence_id, e.raw FROM public_dynamic_evidence de "
         "JOIN evidence e ON e.evidence_id = de.evidence_id "
         "WHERE de.dynamic_id = ? AND de.relation = 'primary' "
-        "AND e.source_type = 'announcement' LIMIT 1",
+        "AND e.source_type = 'announcement' "
+        "ORDER BY de.created_at ASC, e.evidence_id ASC LIMIT 1",
         (dynamic_id,),
     )
     if not row:
@@ -110,7 +118,8 @@ def _cache_failure(evidence_id: str, document_url: str, message: str) -> None:
             "document_url = excluded.document_url, document_hash = NULL, "
             "mime_type = NULL, byte_size = NULL, extraction_status = 'failed', "
             "extracted_text = '', extracted_at = NULL, "
-            "error_message = excluded.error_message, updated_at = excluded.updated_at",
+            "error_message = excluded.error_message, updated_at = excluded.updated_at "
+            "WHERE document_cache.extraction_status <> 'extracted'",
             (evidence_id, document_url, message, updated_at),
         )
 
@@ -129,7 +138,9 @@ def _cache_result(
             "document_hash = excluded.document_hash, mime_type = excluded.mime_type, "
             "byte_size = excluded.byte_size, extraction_status = excluded.extraction_status, "
             "extracted_text = excluded.extracted_text, extracted_at = excluded.extracted_at, "
-            "error_message = NULL, updated_at = excluded.updated_at",
+            "error_message = NULL, updated_at = excluded.updated_at "
+            "WHERE excluded.extraction_status = 'extracted' "
+            "OR document_cache.extraction_status <> 'extracted'",
             (
                 evidence_id,
                 document_url,
@@ -176,12 +187,18 @@ def extract_dynamic_document(
     try:
         raw = json.loads(evidence["raw"] or "{}")
     except (TypeError, json.JSONDecodeError) as exc:
-        raise DocumentRejected("公告元数据无效") from exc
+        message = "公告元数据无效"
+        _cache_failure(evidence_id, "", message)
+        raise DocumentRejected(message) from exc
     if not isinstance(raw, dict):
-        raise DocumentRejected("公告元数据无效")
+        message = "公告元数据无效"
+        _cache_failure(evidence_id, "", message)
+        raise DocumentRejected(message)
     document_url = raw.get("document_url")
     if not isinstance(document_url, str) or not document_url.strip():
-        raise DocumentRejected("公告缺少可提取的 PDF 地址")
+        message = "公告缺少可提取的 PDF 地址"
+        _cache_failure(evidence_id, "", message)
+        raise DocumentRejected(message)
     document_url = document_url.strip()
 
     owned_client = client is None

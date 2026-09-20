@@ -9,7 +9,10 @@ import pymupdf as fitz
 from app import database as db
 from app.services.document_text import (
     DocumentRejected,
+    _cache_failure,
+    _cache_result,
     _download,
+    _primary_announcement,
     extract_dynamic_document,
     extract_pdf_bytes,
     validate_url,
@@ -20,10 +23,23 @@ FIXTURES = Path(__file__).parent / "fixtures" / "public_dynamics"
 
 
 class FakeResponse:
-    def __init__(self, *, status_code=200, headers=None, content=b""):
+    def __init__(self, *, status_code=200, headers=None, content=b"", chunks=None):
         self.status_code = status_code
         self.headers = headers or {}
         self.content = content
+        self.chunks = list(chunks) if chunks is not None else [content]
+        self.yielded_chunks = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def iter_bytes(self):
+        for chunk in self.chunks:
+            self.yielded_chunks += 1
+            yield chunk
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -36,6 +52,10 @@ class FakeClient:
         self.requested_urls = []
 
     def get(self, url, **kwargs):
+        self.requested_urls.append(url)
+        return self.responses.pop(0)
+
+    def stream(self, method, url, **kwargs):
         self.requested_urls.append(url)
         return self.responses.pop(0)
 
@@ -131,6 +151,19 @@ class DocumentTextSafetyTest(unittest.TestCase):
         with self.assertRaises(DocumentRejected):
             _download(client, "https://static.cninfo.com.cn/report.pdf")
 
+    def test_download_stops_chunked_body_when_decoded_bytes_exceed_limit(self):
+        response = FakeResponse(
+            headers={"content-type": "application/pdf"},
+            chunks=[b"%PDF", b"xx", b"must-not-be-read"],
+        )
+        client = FakeClient([response])
+
+        with patch("app.services.document_text.MAX_DOCUMENT_BYTES", 5):
+            with self.assertRaises(DocumentRejected):
+                _download(client, "https://static.cninfo.com.cn/report.pdf")
+
+        self.assertEqual(response.yielded_chunks, 2)
+
     def test_pdf_without_searchable_text_is_unsupported(self):
         document = fitz.open()
         document.new_page()
@@ -224,6 +257,20 @@ class DynamicDocumentExtractionTest(unittest.TestCase):
             content=content,
         )
 
+    def _store_extracted_cache(self):
+        return _cache_result(
+            self.dynamic_id,
+            self.evidence_id,
+            self.document_url,
+            {
+                "status": "extracted",
+                "text": "successful extraction",
+                "hash": "successful-hash",
+                "byte_size": 128,
+                "mime_type": "application/pdf",
+            },
+        )
+
     def test_success_caches_document_and_marks_evidence_and_dynamic_full(self):
         content = (FIXTURES / "searchable.pdf").read_bytes()
 
@@ -309,6 +356,15 @@ class DynamicDocumentExtractionTest(unittest.TestCase):
         with self.assertRaises(DocumentRejected):
             extract_dynamic_document(self.dynamic_id, client=FakeClient([]))
 
+        cached = db.query_one(
+            "SELECT document_url, extraction_status, error_message "
+            "FROM document_cache WHERE evidence_id = ?",
+            (self.evidence_id,),
+        )
+        self.assertEqual(cached["document_url"], "")
+        self.assertEqual(cached["extraction_status"], "failed")
+        self.assertEqual(cached["error_message"], "公告缺少可提取的 PDF 地址")
+
     def test_non_object_evidence_metadata_is_rejected(self):
         db.execute(
             "UPDATE evidence SET raw = '[]' WHERE evidence_id = ?", (self.evidence_id,)
@@ -316,6 +372,98 @@ class DynamicDocumentExtractionTest(unittest.TestCase):
 
         with self.assertRaises(DocumentRejected):
             extract_dynamic_document(self.dynamic_id, client=FakeClient([]))
+
+        cached = db.query_one(
+            "SELECT document_url, extraction_status, error_message "
+            "FROM document_cache WHERE evidence_id = ?",
+            (self.evidence_id,),
+        )
+        self.assertEqual(cached["document_url"], "")
+        self.assertEqual(cached["extraction_status"], "failed")
+        self.assertEqual(cached["error_message"], "公告元数据无效")
+
+    def test_invalid_json_metadata_is_cached_as_failed(self):
+        db.execute(
+            "UPDATE evidence SET raw = '{' WHERE evidence_id = ?", (self.evidence_id,)
+        )
+
+        with self.assertRaises(DocumentRejected):
+            extract_dynamic_document(self.dynamic_id, client=FakeClient([]))
+
+        cached = db.query_one(
+            "SELECT document_url, extraction_status, error_message "
+            "FROM document_cache WHERE evidence_id = ?",
+            (self.evidence_id,),
+        )
+        self.assertEqual(cached["document_url"], "")
+        self.assertEqual(cached["extraction_status"], "failed")
+        self.assertEqual(cached["error_message"], "公告元数据无效")
+
+    def test_late_failure_cannot_overwrite_extracted_cache(self):
+        expected = self._store_extracted_cache()
+
+        _cache_failure(self.evidence_id, self.document_url, "late failure")
+
+        actual = db.query_one(
+            "SELECT * FROM document_cache WHERE evidence_id = ?", (self.evidence_id,)
+        )
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            db.query_one(
+                "SELECT content_status FROM evidence WHERE evidence_id = ?",
+                (self.evidence_id,),
+            )["content_status"],
+            "full",
+        )
+        self.assertEqual(
+            db.query_one(
+                "SELECT content_status FROM public_dynamics WHERE id = ?",
+                (self.dynamic_id,),
+            )["content_status"],
+            "full",
+        )
+
+    def test_late_unsupported_result_cannot_overwrite_extracted_cache(self):
+        expected = self._store_extracted_cache()
+
+        returned = _cache_result(
+            self.dynamic_id,
+            self.evidence_id,
+            self.document_url,
+            {
+                "status": "unsupported",
+                "text": "",
+                "hash": "late-unsupported-hash",
+                "byte_size": 64,
+                "mime_type": "application/pdf",
+            },
+        )
+
+        actual = db.query_one(
+            "SELECT * FROM document_cache WHERE evidence_id = ?", (self.evidence_id,)
+        )
+        self.assertEqual(actual, expected)
+        self.assertEqual(returned, expected)
+
+    def test_multiple_primary_announcements_use_earliest_link_deterministically(self):
+        second_id = "evidence-0"
+        db.execute(
+            "INSERT INTO evidence (evidence_id, stock_code, source_type, source_level, "
+            "title, excerpt, published_at, source_url, fetched_at, content_status, raw) "
+            "VALUES (?, '600000', 'announcement', 'primary', '第二份公告', '', "
+            "'2026-09-21T00:00:00+00:00', 'https://www.cninfo.com.cn/second', "
+            "'2026-09-21T00:00:00+00:00', 'title_only', ?)",
+            (second_id, json.dumps({"document_url": self.document_url})),
+        )
+        db.execute(
+            "INSERT INTO public_dynamic_evidence (dynamic_id, evidence_id, relation, created_at) "
+            "VALUES (?, ?, 'primary', '2026-09-21T01:00:00+00:00')",
+            (self.dynamic_id, second_id),
+        )
+
+        selected = _primary_announcement(self.dynamic_id)
+
+        self.assertEqual(selected["evidence_id"], self.evidence_id)
 
 
 if __name__ == "__main__":
