@@ -190,6 +190,29 @@ class ZhipuCompatibilityTest(unittest.TestCase):
 
         self.assertTrue(fake.closed)
 
+    def test_model_name_error_is_reported_as_actionable_model_failure(self):
+        original_client = ai._client
+        fake = FakeClient()
+
+        def raise_model_error(**kwargs):
+            raise RuntimeError("Error code: 400 - model not found")
+
+        fake.chat.completions.create = raise_model_error
+        try:
+            ai._client = lambda config: fake
+
+            with self.assertRaises(ai.AIError) as context:
+                ai._call_model(
+                    ZHIPU_CONFIG,
+                    "system instructions",
+                    {"stock": {"code": "600519"}},
+                )
+        finally:
+            ai._client = original_client
+
+        self.assertEqual(context.exception.category, "model")
+        self.assertIn("模型名称", str(context.exception))
+
     def test_request_is_pinned_to_validated_ip_with_original_authority(self):
         request = httpx.Request(
             "POST",

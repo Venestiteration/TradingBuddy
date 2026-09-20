@@ -80,7 +80,7 @@ TRADING_PATTERN = re.compile(
 class AIError(RuntimeError):
     def __init__(self, category: str, message: str):
         super().__init__(message)
-        self.category = category  # timeout / quota / schema / network / unknown
+        self.category = category  # timeout / quota / schema / model / network / unknown
 
 
 def evidence_fingerprint(evidence_ids: list[str]) -> str:
@@ -258,6 +258,13 @@ def call_structured_model(
             raise AIError("quota", "模型额度或频率受限") from exc
         if "api key" in lowered or "401" in text or "403" in text:
             raise AIError("auth", "API Key 无效或没有模型权限") from exc
+        if (
+            ("model" in lowered and any(marker in lowered for marker in ("not found", "does not exist", "invalid")))
+            or "模型不存在" in text
+            or "模型不支持" in text
+            or "1210" in text
+        ):
+            raise AIError("model", "模型名称不被该服务支持，请检查模型名称") from exc
         raise AIError("network", f"模型调用失败: {text[:200]}") from exc
     finally:
         _close_client(client)

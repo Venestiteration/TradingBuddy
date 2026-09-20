@@ -14,6 +14,20 @@ export const AI_API_PRESETS = [
   { id: "custom", label: "自定义地址", url: "", mode: "chat" },
 ];
 
+export const AI_MODEL_DEFAULTS = Object.freeze({
+  openai: "gpt-4.1-mini",
+  zhipu: "glm-4-flash",
+  deepseek: "deepseek-chat",
+  qwen: "qwen-plus",
+  siliconflow: "Qwen/Qwen2.5-7B-Instruct",
+  moonshot: "moonshot-v1-8k",
+  custom: "",
+});
+
+export function modelDefaultForProvider(providerId) {
+  return AI_MODEL_DEFAULTS[providerId] || "";
+}
+
 const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "").toLowerCase();
 
 export function apiPresetFor(baseUrl) {

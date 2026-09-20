@@ -1,4 +1,4 @@
-import { api, streamPost } from "./api.js?v=20260920-visitor-ai-guard";
+import { api, streamPost } from "./api.js?v=20260920-zhipu-model-defaults";
 import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
 import {
@@ -10,6 +10,7 @@ import {
 } from "./thesis-workflow.js";
 import {
   AI_API_PRESETS,
+  AI_MODEL_DEFAULTS,
   AI_TOUR_KEY,
   SOURCE_TOUR_KEY,
   aiHeaders,
@@ -22,12 +23,13 @@ import {
   isCurrentView,
   loadAIConfig,
   loadAssetAI,
+  modelDefaultForProvider,
   runCurrentViewRefresh,
   saveAIConfig,
   saveAnalysis,
   saveConversationTurn,
   transitionAssetView,
-} from "./ai-local.js?v=20260920-visitor-ai-guard";
+} from "./ai-local.js?v=20260920-zhipu-model-defaults";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -755,9 +757,29 @@ function syncAPIUrlPreset(select) {
   const custom = select.value === "custom";
   const wrapper = select.form?.querySelector("[data-api-url-custom]");
   const input = wrapper?.querySelector("input[name=custom_base_url]");
-  if (!wrapper || !input) return;
-  wrapper.hidden = !custom;
-  input.required = custom;
+  const modelInput = select.form?.querySelector("input[name=model]");
+  const hint = select.form?.querySelector(".setting-hint");
+  if (wrapper && input) {
+    wrapper.hidden = !custom;
+    input.required = custom;
+  }
+
+  const nextDefault = modelDefaultForProvider(select.value);
+  const currentModel = modelInput?.value.trim() || "";
+  const previousDefault = modelInput?.dataset.providerDefault || "";
+  const knownDefault = Object.values(AI_MODEL_DEFAULTS).includes(currentModel);
+  if (modelInput && nextDefault && (!currentModel || currentModel === previousDefault || knownDefault)) {
+    modelInput.value = nextDefault;
+  }
+  if (modelInput) {
+    modelInput.placeholder = nextDefault ? `例如 ${nextDefault}` : "填写该服务支持的模型名称";
+    modelInput.dataset.providerDefault = nextDefault;
+  }
+  if (hint) {
+    hint.textContent = select.value === "zhipu"
+      ? "智谱 AI 请填写智谱支持的模型，例如 glm-4-flash；不要填写 gpt-4.1-mini。"
+      : "常用服务已预填地址；如果服务器无法直连 OpenAI 官方，请选择 DeepSeek、智谱、通义或自定义可访问地址。";
+  }
 }
 
 function turnOffAI(trigger = null) {
@@ -810,8 +832,8 @@ function renderSheet() {
   if (view.type === "add") els.sheet.innerHTML = addAssetSheet();
   if (view.type === "settings") {
     els.sheet.innerHTML = settingsSheet();
-    const providerHint = els.sheet.querySelector(".setting-hint");
-    if (providerHint) providerHint.textContent = "常用服务已预填地址；如果服务器无法直连 OpenAI 官方，请选择 DeepSeek、智谱、通义或自定义可访问地址。";
+    const providerSelect = els.sheet.querySelector("[data-api-url-preset]");
+    if (providerSelect) syncAPIUrlPreset(providerSelect);
   }
   if (view.type === "thesisContext") {
     els.sheet.innerHTML = state.thesisContext
@@ -947,6 +969,7 @@ function parseSSEBlock(block) {
 const AI_ERROR_MESSAGES = {
   not_configured: "请先配置并启用 AI 分析。",
   auth: "API Key 无效或没有模型权限，请检查本地配置。",
+  model: "模型名称不被该服务支持；智谱请填写账号可用的 GLM 模型，例如 glm-4-flash。",
   network: "无法连接模型服务，请检查网络或 API 地址。",
   quota: "模型额度或频率受限，请稍后重试或更换模型。",
   timeout: "模型响应超时；如果选择 OpenAI 官方，当前服务器可能无法直连，请改用 DeepSeek、智谱、通义或自定义可访问地址。",

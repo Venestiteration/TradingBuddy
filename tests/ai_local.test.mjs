@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   AI_CONFIG_KEY,
   AI_API_PRESETS,
+  AI_MODEL_DEFAULTS,
   AI_WORKSPACE_KEY,
   aiHeaders,
   apiPresetFor,
@@ -14,6 +15,7 @@ import {
   saveAIConfig,
   saveAnalysis,
   saveConversationTurn,
+  modelDefaultForProvider,
 } from "../frontend/ai-local.js";
 
 class MemoryStorage {
@@ -51,6 +53,12 @@ test("AI endpoint presets include common providers and preserve custom endpoints
   assert.equal(apiPresetFor("https://api.deepseek.com/v1").id, "deepseek");
   assert.equal(apiPresetFor("https://custom.example/v1").id, "custom");
   assert.equal(apiPresetFor("https://custom.example/v1").mode, "chat");
+});
+
+test("provider presets provide compatible model defaults", () => {
+  assert.equal(modelDefaultForProvider("zhipu"), "glm-4-flash");
+  assert.equal(AI_MODEL_DEFAULTS.openai, "gpt-4.1-mini");
+  assert.equal(modelDefaultForProvider("custom"), "");
 });
 
 test("incomplete stored AI configuration cannot enable empty-key requests", () => {
