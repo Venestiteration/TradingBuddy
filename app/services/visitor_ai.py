@@ -39,6 +39,8 @@ def build_visitor_ai_config(
     api_mode: str | None = None,
     resolver: Callable = socket.getaddrinfo,
 ) -> VisitorAIConfig:
+    if api_key is None:
+        raise HTTPException(status_code=400, detail="未收到 API Key，请重新保存")
     key = (api_key or "").strip()
     model_name = (model or "").strip()
     url = (base_url or "").strip() or DEFAULT_OPENAI_BASE_URL

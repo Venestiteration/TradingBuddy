@@ -53,6 +53,11 @@ class VisitorAIConfigTest(unittest.TestCase):
                 build_visitor_ai_config(key, model, "", resolver=public_resolver)
             self.assertEqual(caught.exception.status_code, 400)
 
+    def test_missing_key_header_has_actionable_error(self):
+        with self.assertRaises(HTTPException) as caught:
+            build_visitor_ai_config(None, "gpt-4.1-mini", "", resolver=public_resolver)
+        self.assertEqual(caught.exception.detail, "未收到 API Key，请重新保存")
+
     def test_non_https_and_private_destinations_are_rejected(self):
         cases = [
             ("http://api.example.com/v1", public_resolver),

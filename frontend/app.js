@@ -1,4 +1,4 @@
-import { api, streamPost } from "./api.js";
+import { api, streamPost } from "./api.js?v=20260920-visitor-ai-guard";
 import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
 import {
