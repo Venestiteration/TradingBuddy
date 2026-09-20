@@ -7,3 +7,4 @@ numpy>=1.24
 requests>=2.31
 openai>=1.66
 httpx>=0.27
+PyMuPDF>=1.24

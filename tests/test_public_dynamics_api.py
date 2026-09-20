@@ -4,10 +4,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app import database as db
 from app.main import create_app
+from app.services.document_text import DocumentRejected
 from app.services.public_dynamics import list_public_dynamics
 
 
@@ -39,6 +41,9 @@ class PublicDynamicsAPITest(unittest.TestCase):
             "VALUES (?, ?, ?, 'complete', ?)",
             (self.asset_id, timestamp, timestamp, timestamp),
         )
+        self.dynamic_id = db.query_one(
+            "SELECT id FROM public_dynamics ORDER BY id LIMIT 1"
+        )["id"]
         self.client = TestClient(create_app())
 
     def tearDown(self):
@@ -106,6 +111,53 @@ class PublicDynamicsAPITest(unittest.TestCase):
             len(list_public_dynamics(self.asset_id, now - timedelta(hours=24), now)),
         )
         self.assertIsNone(categories["upstream"]["recent_count_24h"])
+
+    @patch("app.routers.public_dynamics.extract_dynamic_document")
+    def test_extract_endpoint_returns_cached_document_result(self, extract):
+        extract.return_value = {
+            "evidence_id": "evidence-1",
+            "extraction_status": "extracted",
+            "extracted_text": "announcement text",
+        }
+
+        response = self.client.post(
+            f"/api/public-dynamics/{self.dynamic_id}/extract"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["extraction_status"], "extracted")
+        extract.assert_called_once_with(self.dynamic_id)
+
+    @patch("app.routers.public_dynamics.extract_dynamic_document")
+    def test_extract_endpoint_returns_404_before_extraction(self, extract):
+        response = self.client.post("/api/public-dynamics/9999/extract")
+
+        self.assertEqual(response.status_code, 404)
+        extract.assert_not_called()
+
+    @patch("app.routers.public_dynamics.extract_dynamic_document")
+    def test_extract_endpoint_maps_rejected_document_to_422(self, extract):
+        extract.side_effect = DocumentRejected("公告地址不在允许列表中")
+
+        response = self.client.post(
+            f"/api/public-dynamics/{self.dynamic_id}/extract"
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "公告地址不在允许列表中")
+
+    @patch("app.routers.public_dynamics.extract_dynamic_document")
+    def test_extract_endpoint_maps_http_failure_to_generic_503(self, extract):
+        extract.side_effect = httpx.HTTPError(
+            "/Users/private/report.pdf SECRET_RESPONSE_BODY"
+        )
+
+        response = self.client.post(
+            f"/api/public-dynamics/{self.dynamic_id}/extract"
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "公告正文暂时无法获取")
 
 
 if __name__ == "__main__":

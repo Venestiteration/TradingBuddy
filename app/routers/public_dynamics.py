@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import database as db
+from ..services.document_text import DocumentRejected, extract_dynamic_document
 from ..services.public_dynamics import (
     get_public_dynamic,
     list_public_dynamics,
@@ -54,3 +56,15 @@ def public_dynamic_detail(dynamic_id: int) -> dict:
     if not item:
         raise HTTPException(status_code=404, detail="公开动态不存在")
     return {"dynamic": item, "fetched_at": db.utcnow()}
+
+
+@router.post("/public-dynamics/{dynamic_id}/extract")
+def extract_public_dynamic(dynamic_id: int) -> dict:
+    if not get_public_dynamic(dynamic_id):
+        raise HTTPException(status_code=404, detail="公开动态不存在")
+    try:
+        return extract_dynamic_document(dynamic_id)
+    except DocumentRejected as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="公告正文暂时无法获取") from exc
