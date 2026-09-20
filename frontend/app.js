@@ -27,7 +27,7 @@ import {
   saveAnalysis,
   saveConversationTurn,
   transitionAssetView,
-} from "./ai-local.js";
+} from "./ai-local.js?v=20260920-visitor-ai-guard";
 
 const $ = (selector) => document.querySelector(selector);
 
