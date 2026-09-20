@@ -1,4 +1,4 @@
-import { api, streamPost } from "./api.js";
+import { api, streamPost } from "./api.js?v=20260920-zhipu-model-defaults";
 import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
 import {
@@ -8,12 +8,35 @@ import {
   thesisHistorySheet,
   thesisReviewSheet,
 } from "./thesis-workflow.js";
+import {
+  AI_API_PRESETS,
+  AI_MODEL_DEFAULTS,
+  AI_TOUR_KEY,
+  SOURCE_TOUR_KEY,
+  aiHeaders,
+  apiPresetFor,
+  applyIfCurrentView,
+  boundRecentMessages,
+  captureView,
+  clearAIData,
+  disableAI,
+  isCurrentView,
+  loadAIConfig,
+  loadAssetAI,
+  modelDefaultForProvider,
+  runCurrentViewRefresh,
+  saveAIConfig,
+  saveAnalysis,
+  saveConversationTurn,
+  transitionAssetView,
+} from "./ai-local.js?v=20260920-zhipu-model-defaults";
 
 const $ = (selector) => document.querySelector(selector);
 
 const state = {
   assets: [],
   assetId: null,
+  viewGeneration: 0,
   overview: null,
   selectedEventId: null,
   analysis: null,
@@ -39,6 +62,12 @@ const state = {
   tourReturnFocus: null,
   tourCloseTimer: null,
   toastTimer: null,
+  aiConfig: loadAIConfig(),
+  localMessages: [],
+  localAnalyses: [],
+  aiSettingsExpanded: false,
+  tourKind: "sources",
+  tourSteps: [],
 };
 
 const els = {
@@ -48,6 +77,7 @@ const els = {
   assetSwitcher: $("#asset-switcher"),
   assetSwitcherLabel: $("#asset-switcher-label"),
   assetPopover: $("#asset-popover"),
+  composerDock: $("#composer-dock"),
   composer: $("#composer"),
   promptInput: $("#composer textarea"),
   sendButton: $("#composer .send-button"),
@@ -65,12 +95,24 @@ const els = {
   },
 };
 
-const tourSteps = [
+const aiEnabled = () => state.aiConfig.enabled === true;
+
+function syncAIMode() {
+  els.composerDock.hidden = !aiEnabled();
+  els.appShell.classList.toggle("ai-disabled", !aiEnabled());
+}
+
+const sourceTourSteps = [
   { target: '[data-tour="asset"]', title: "选择标的", body: "这里只显示你的持仓和自选。点击可切换当前研究标的。" },
-  { target: '[data-tour="dynamic"]', title: "查看动态", body: "先看当前最重要的变化，以及它是否影响你原来的判断。" },
-  { target: '[data-tour="actions"]', title: "继续理解", body: "点击快捷问题继续追问；展开分析可区分事实、推断和未知。" },
-  { target: '[data-tour="composer"]', title: "自由追问", body: "有其他问题，直接在这里输入。回答会继承当前标的和证据。" },
-  { target: '[data-tour="archive"]', title: "研究档案", body: "在这里核验判断、数据、推断与来源。页面里的数值和结论也能直接定位到对应依据。" },
+  { target: '[data-tour="dynamic"]', title: "查看公开动态", body: "AI 关闭时仍会收集行情、公告、新闻和可核验来源。" },
+  { target: ".importance-timeline", title: "识别研究重点", body: "重要性时间线由确定性规则整理，不需要调用大模型。" },
+  { target: '[data-tour="archive"]', title: "核验数据与来源", body: "研究档案会保留行情口径和原始来源，便于独立核验。" },
+  { target: '[data-tour="settings"]', title: "按需启用 AI", body: "AI 默认关闭。进入设置并填写自己的 API Key 后，可生成分析和继续追问。", action: "open-ai-settings" },
+];
+
+const aiTourSteps = [
+  { target: '[data-action="run-analysis"]', title: "生成证据约束的分析", body: "分析会区分已知事实、当前推断、未知和下一步核验。" },
+  { target: '[data-tour="composer"]', title: "围绕证据继续追问", body: "问题和回答只保存在当前浏览器，不会进入公共数据库。" },
 ];
 
 function escapeHtml(value) {
@@ -234,7 +276,7 @@ function eventFreshness(event) {
 
 function renderEventPush(event, index) {
   const unread = !state.readEvents.has(event.event_id);
-  const selected = event.event_id === state.selectedEventId;
+  const selected = aiEnabled() && event.event_id === state.selectedEventId;
   return `
     <article class="push-message ${selected ? "selected-push" : ""}" data-push-id="${escapeHtml(event.event_id)}">
       <div class="push-meta">${unread ? '<i class="unread-dot" aria-label="未读"></i>' : ""}<span>${escapeHtml(eventSourceLabel(event))}</span><span>·</span><span>${escapeHtml(formatDate(event.published_at))}</span><span class="push-priority">${escapeHtml(eventFreshness(event))}</span></div>
@@ -242,7 +284,7 @@ function renderEventPush(event, index) {
       <p class="push-summary">${escapeHtml(event.excerpt || "当前仅有标题，无法核验正文细节。")}</p>
       <p class="push-reason"><strong>为什么保留：</strong>${event.source_level === "primary" ? "一级来源优先进入研究范围。" : "作为公开线索保留，不能单独推出原因结论。"}</p>
       <div class="message-actions">
-        <button class="prompt-chip pressable" type="button" data-action="select-event" data-event-id="${escapeHtml(event.event_id)}">${selected ? "已选择分析" : "选择分析"}</button>
+        ${aiEnabled() ? `<button class="prompt-chip pressable" type="button" data-action="select-event" data-event-id="${escapeHtml(event.event_id)}">${selected ? "已选择分析" : "选择分析"}</button>` : ""}
         <button class="text-button pressable" type="button" data-source-id="${escapeHtml(event.event_id)}">查看来源</button>
       </div>
     </article>
@@ -280,24 +322,31 @@ function renderContextLine(asset, event) {
 }
 
 function renderDynamicMessage(asset, event) {
-  const result = state.analysis;
-  const status = result ? impactLabel(result) : event ? "信息待核验" : "暂无动态";
-  const statusClass = result ? impactClass(result) : "uncertain";
+  const enabled = aiEnabled();
+  const result = enabled ? state.analysis : null;
+  const status = enabled ? (result ? impactLabel(result) : event ? "信息待核验" : "暂无动态") : "信息源已收集";
+  const statusClass = enabled ? (result ? impactClass(result) : "uncertain") : "support";
   const headline = event?.title || "今天暂时没有需要解释的新动态";
   const lede = event?.excerpt || "当前没有可确认的事件。你可以先查看行情，或在研究档案中保存自己的判断。";
   const promptList = ["这条动态影响我的判断吗？", "只说已知事实", "还有哪些信息要核验？"];
+  const conclusion = enabled
+    ? `<div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span><span>相对于研究档案中的判断</span></div><button class="detail-link pressable" type="button" data-trace="primary">详情</button></div>`
+    : `<div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span></div></div>`;
+  const actions = enabled
+    ? `<div class="message-actions" data-tour="actions">
+        ${promptList.map((prompt) => `<button class="prompt-chip pressable" type="button" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}
+        ${result ? '<button class="text-button pressable" type="button" data-analysis-toggle="latest" aria-expanded="false">展开分析</button>' : event ? '<button class="text-button pressable" type="button" data-action="run-analysis">生成分析</button>' : ""}
+      </div>`
+    : "";
   return `
     <article class="message assistant" data-tour="thesis">
       <div data-tour="dynamic">
         <div class="assistant-kicker"><span class="status-dot ${statusClass}"></span>今日最重要的变化 · ${event ? escapeHtml(eventSourceLabel(event)) : "数据状态"}</div>
         <h1>${escapeHtml(headline)}</h1>
         <p class="lede">${escapeHtml(lede)}</p>
-        <div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span><span>相对于研究档案中的判断</span></div><button class="detail-link pressable" type="button" data-trace="primary">详情</button></div>
+        ${conclusion}
       </div>
-      <div class="message-actions" data-tour="actions">
-        ${promptList.map((prompt) => `<button class="prompt-chip pressable" type="button" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}
-        ${result ? '<button class="text-button pressable" type="button" data-analysis-toggle="latest" aria-expanded="false">展开分析</button>' : event ? '<button class="text-button pressable" type="button" data-action="run-analysis">生成分析</button>' : ""}
-      </div>
+      ${actions}
       ${result ? `<div class="analysis" data-analysis="latest" hidden><p class="analysis-conclusion">${escapeHtml(result.conclusion || "未形成结论")}</p>${analysisMarkup(result)}</div>` : ""}
       <div class="source-line"><span>${state.overview?.events?.length || 0} 个来源</span><span>·</span><button type="button" data-archive-tab="sources">查看来源记录</button></div>
     </article>
@@ -306,7 +355,7 @@ function renderDynamicMessage(asset, event) {
 
 function renderThesisDraftBanner() {
   const thesisDate = state.overview?.thesis?.created_at || "";
-  const eligible = (state.overview?.messages || []).filter(
+  const eligible = state.localMessages.filter(
     (message) => message.role === "assistant" && (!thesisDate || message.created_at > thesisDate),
   );
   if (!eligible.length) return "";
@@ -329,8 +378,7 @@ function renderConversation() {
       + renderImportanceChart(state.importanceRows, { escapeHtml })
       + renderDynamicMessage(asset, state.overview?.events?.[0])
       + (state.pending.question ? `<article class="message user"><div class="user-message">${escapeHtml(state.pending.question)}</div></article>` : "")
-      + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`
-      + renderThesisDraftBanner();
+      + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`;
     bindImportance();
     return;
   }
@@ -338,13 +386,12 @@ function renderConversation() {
   const event = events.find((item) => item.event_id === state.selectedEventId) || events[0] || null;
   if (event) state.selectedEventId = event.event_id;
   const olderEvents = event ? events.filter((item) => item.event_id !== event.event_id).slice(0, 8) : [];
-  const messages = state.overview?.messages || [];
+  const messages = aiEnabled() ? state.localMessages : [];
   els.conversation.innerHTML = renderContextLine(asset, event)
     + renderImportanceChart(state.importanceRows, { escapeHtml })
     + renderDynamicMessage(asset, event)
     + olderEvents.map(renderEventPush).join("")
-    + messages.map(renderMessage).join("")
-    + renderThesisDraftBanner();
+    + messages.map(renderMessage).join("");
   bindImportance();
 }
 
@@ -456,10 +503,14 @@ function sheetHeader(title, context = "", back = false) {
   `;
 }
 
-function archiveSheet(tab = state.archiveTab) {
+function archiveSheet(tab = null) {
+  const tabs = aiEnabled() ? ["thesis", "data", "inferences", "sources"] : ["thesis", "data", "sources"];
+  const requestedTab = tab || state.archiveTab;
+  const defaultTab = !tab && !aiEnabled() && requestedTab === "thesis" ? "data" : requestedTab;
+  tab = tabs.includes(defaultTab) ? defaultTab : "data";
   state.archiveTab = tab;
   const thesis = state.overview?.thesis;
-  const result = state.analysis;
+  const result = aiEnabled() ? state.analysis : null;
   let panel = "";
   if (tab === "thesis") {
     panel = thesis ? `
@@ -491,7 +542,7 @@ function archiveSheet(tab = state.archiveTab) {
       <section class="source-card"><div class="source-card-head"><div><div class="source-meta"><span>${escapeHtml(eventSourceLabel(event))}</span><span>·</span><span>${escapeHtml(formatDate(event.published_at))}</span></div><h3><button class="text-button pressable" type="button" data-source-id="${escapeHtml(event.event_id)}">${escapeHtml(event.title)}</button></h3></div><span class="source-state ${event.content_status === "title_only" ? "offline" : ""}">${escapeHtml(eventFreshness(event))}</span></div><p class="source-related">${escapeHtml(event.excerpt || "当前无正文摘录。")}</p></section>
     `).join("") : '<div class="uncertainty-callout"><strong>暂无已保存来源</strong><p>刷新数据后，公开事件会出现在这里。</p></div>';
   }
-  return `${sheetHeader("研究档案", selectedAsset()?.stock_code || "")}<div class="sheet-body"><div class="archive-tabs">${["thesis", "data", "inferences", "sources"].map((item) => `<button class="archive-tab pressable" type="button" data-archive-tab="${item}" aria-selected="${tab === item}">${item === "thesis" ? "判断" : item === "data" ? "数据" : item === "inferences" ? "推断" : "来源"}</button>`).join("")}</div><div class="archive-panel">${panel}</div></div>`;
+  return `${sheetHeader("研究档案", selectedAsset()?.stock_code || "")}<div class="sheet-body"><div class="archive-tabs">${tabs.map((item) => `<button class="archive-tab pressable" type="button" data-archive-tab="${item}" aria-selected="${tab === item}">${item === "thesis" ? "判断" : item === "data" ? "数据" : item === "inferences" ? "推断" : "来源"}</button>`).join("")}</div><div class="archive-panel">${panel}</div></div>`;
 }
 
 function traceSheet() {
@@ -526,6 +577,10 @@ async function openThesisContext(trigger) {
 }
 
 async function addImportanceDayToThesis(date, trigger) {
+  if (!aiEnabled()) {
+    showToast("请先配置并启用 AI 分析", "error");
+    return;
+  }
   if (!state.assetId) return;
   try {
     const [context, day] = await Promise.all([
@@ -557,14 +612,17 @@ function selectedThesisScope() {
 async function generateThesisDraft() {
   if (!state.assetId || state.thesisDraftPending) return;
   const scope = selectedThesisScope();
+  const assetId = state.assetId;
+  const view = captureView(state);
   state.thesisDraftPending = true;
   state.abortController = new AbortController();
   showToast("正在整理判断草稿…");
   try {
-    await streamPost(`/assets/${state.assetId}/thesis-drafts/generate`, {
+    await streamPost(`/assets/${assetId}/thesis-drafts/generate`, {
       message_ids: scope.messageIds,
       evidence_ids: scope.evidenceIds,
     }, ({ data }) => {
+      if (!isCurrentView(state, view)) return;
       if (data.status === "completed") {
         state.thesisDraft = data.draft;
         state.thesisAcceptedChanges = {};
@@ -573,12 +631,14 @@ async function generateThesisDraft() {
         renderSheet();
       }
       if (data.status === "failed") throw new Error(data.message || "判断草稿生成失败");
-    }, state.abortController.signal);
+    }, state.abortController.signal, aiHeaders(state.aiConfig));
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.message, "error");
+    if (isCurrentView(state, view) && error.name !== "AbortError") showToast(error.message, "error");
   } finally {
-    state.thesisDraftPending = false;
-    state.abortController = null;
+    applyIfCurrentView(state, view, () => {
+      state.thesisDraftPending = false;
+      state.abortController = null;
+    });
   }
 }
 
@@ -645,13 +705,124 @@ function addAssetSheet() {
 
 function settingsSheet() {
   const configured = Boolean(state.overview && state.overview.fetched_at);
-  return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section"><span class="detail-eyebrow">AI 配置</span><p>模型配置保存在仓库根目录的 .env 中。API Key 不在页面展示，也不会写入仓库。</p></section></div>`;
+  const aiFormHidden = aiEnabled() || state.aiSettingsExpanded ? "" : " hidden";
+  const apiPreset = apiPresetFor(state.aiConfig.baseUrl);
+  const customBaseUrl = apiPreset.id === "custom" ? state.aiConfig.baseUrl : "";
+  const apiPresetOptions = AI_API_PRESETS.map((preset) => `<option value="${preset.id}"${preset.id === apiPreset.id ? " selected" : ""}>${escapeHtml(preset.label)}</option>`).join("");
+  return `${sheetHeader("设置", "当前本机实例") }<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">产品边界</span><p>TradingBuddy 只整理研究信息，不连接券商、不执行交易，也不提供买卖指令。</p></section><section class="detail-section"><span class="detail-eyebrow">数据状态</span><p>${configured ? "当前标的的本地数据已加载。" : "添加标的后加载本地数据。"}</p></section><section class="detail-section ai-settings" id="ai-settings"><div class="setting-row"><div class="setting-copy"><strong>AI 分析</strong><span>使用你自己的模型密钥生成分析和继续追问</span></div><button class="switch pressable" type="button" role="switch" data-ai-toggle aria-checked="${aiEnabled()}" aria-label="${aiEnabled() ? "关闭 AI 分析" : "启用 AI 分析"}"></button></div><p class="local-privacy-note">配置和分析结果仅保存在当前浏览器。</p><form id="ai-settings-form" class="sheet-form ai-settings-form"${aiFormHidden}><label>API Key<div class="secret-field"><input name="api_key" type="password" autocomplete="off" value="${escapeHtml(state.aiConfig.apiKey)}" required><button type="button" class="text-button pressable" data-toggle-api-key>显示</button></div></label><label>模型名称<input name="model" placeholder="例如 gpt-4.1-mini 或 glm-4-flash" value="${escapeHtml(state.aiConfig.model)}" required></label><label>模型服务<select name="api_url_preset" data-api-url-preset>${apiPresetOptions}</select></label><div class="api-url-custom" data-api-url-custom${apiPreset.id === "custom" ? "" : " hidden"}><label>自定义 API 地址<input name="custom_base_url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1" value="${escapeHtml(customBaseUrl)}"${apiPreset.id === "custom" ? " required" : ""}></label></div><p class="setting-hint">常用服务已预填地址；选择“自定义地址”可填写其他 HTTPS 兼容服务。</p><div class="button-row"><button class="primary-button pressable" type="submit">保存并启用</button></div></form><div class="button-row"><button class="secondary-button pressable" type="button" data-replay-ai-tour>重新查看 AI 使用说明</button><button class="text-button danger pressable" type="button" data-clear-ai>清除本地 AI 配置</button></div></section></div>`;
+}
+
+function captureSheetFocus(element) {
+  if (!element) return null;
+  for (const attribute of ["data-ai-toggle", "data-clear-ai", "data-toggle-api-key", "data-replay-ai-tour"]) {
+    if (element.matches?.(`[${attribute}]`)) return `[${attribute}]`;
+  }
+  return element.id ? `#${element.id}` : null;
+}
+
+function restoreSheetFocus(selector) {
+  if (!selector) return;
+  requestAnimationFrame(() => els.sheet.querySelector(selector)?.focus());
+}
+
+function saveAISettings(form) {
+  const values = Object.fromEntries(new FormData(form).entries());
+  const apiPreset = AI_API_PRESETS.find((preset) => preset.id === values.api_url_preset) || AI_API_PRESETS[0];
+  const baseUrl = apiPreset.id === "custom" ? String(values.custom_base_url || "").trim() : apiPreset.url;
+  if (apiPreset.id === "custom" && !baseUrl) {
+    showToast("请填写自定义 API 地址", "error");
+    return;
+  }
+  try {
+    state.aiConfig = saveAIConfig({
+      enabled: true,
+      apiKey: values.api_key,
+      model: values.model,
+      baseUrl,
+      apiMode: apiPreset.mode,
+    });
+    state.aiSettingsExpanded = false;
+    loadLocalAIState();
+    syncAIMode();
+    closeSheet();
+    renderConversation();
+    showToast("AI 分析已启用", "success");
+    requestAnimationFrame(() => startTour("ai"));
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function syncAPIUrlPreset(select) {
+  const custom = select.value === "custom";
+  const wrapper = select.form?.querySelector("[data-api-url-custom]");
+  const input = wrapper?.querySelector("input[name=custom_base_url]");
+  const modelInput = select.form?.querySelector("input[name=model]");
+  const hint = select.form?.querySelector(".setting-hint");
+  if (wrapper && input) {
+    wrapper.hidden = !custom;
+    input.required = custom;
+  }
+
+  const nextDefault = modelDefaultForProvider(select.value);
+  const currentModel = modelInput?.value.trim() || "";
+  const previousDefault = modelInput?.dataset.providerDefault || "";
+  const knownDefault = Object.values(AI_MODEL_DEFAULTS).includes(currentModel);
+  if (modelInput && nextDefault && (!currentModel || currentModel === previousDefault || knownDefault)) {
+    modelInput.value = nextDefault;
+  }
+  if (modelInput) {
+    modelInput.placeholder = nextDefault ? `例如 ${nextDefault}` : "填写该服务支持的模型名称";
+    modelInput.dataset.providerDefault = nextDefault;
+  }
+  if (hint) {
+    hint.textContent = select.value === "zhipu"
+      ? "智谱 AI 请填写智谱支持的模型，例如 glm-4-flash；不要填写 gpt-4.1-mini。"
+      : "常用服务已预填地址；如果服务器无法直连 OpenAI 官方，请选择 DeepSeek、智谱、通义或自定义可访问地址。";
+  }
+}
+
+function turnOffAI(trigger = null) {
+  const focusTarget = captureSheetFocus(trigger);
+  try {
+    disableAI();
+    state.aiConfig = loadAIConfig();
+    state.analysis = null;
+    syncAIMode();
+    renderSheet();
+    restoreSheetFocus(focusTarget);
+    renderConversation();
+    showToast("AI 分析已关闭");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function clearAISettings(trigger = null) {
+  const focusTarget = captureSheetFocus(trigger);
+  const confirmed = window.confirm("将删除本浏览器中的 API Key、模型配置和全部 AI 分析记录。继续吗？");
+  if (!confirmed) return;
+  try {
+    clearAIData();
+    state.aiConfig = loadAIConfig();
+    state.localMessages = [];
+    state.localAnalyses = [];
+    state.analysis = null;
+    state.aiSettingsExpanded = false;
+    syncAIMode();
+    renderSheet();
+    restoreSheetFocus(focusTarget);
+    renderConversation();
+    showToast("本地 AI 配置已清除");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
 }
 
 function renderSheet() {
   if (!state.sheetView) return;
   const view = state.sheetView;
-  if (view.type === "archive") els.sheet.innerHTML = archiveSheet(view.tab || state.archiveTab);
+  if (view.type === "archive") els.sheet.innerHTML = archiveSheet(view.tab);
   if (view.type === "trace") els.sheet.innerHTML = traceSheet();
   if (view.type === "metric") els.sheet.innerHTML = metricSheet(view.metricKey);
   if (view.type === "source") els.sheet.innerHTML = sourceSheet(view.sourceId);
@@ -659,7 +830,11 @@ function renderSheet() {
   if (view.type === "editThesis") els.sheet.innerHTML = thesisEditSheet();
   if (view.type === "assets") els.sheet.innerHTML = assetsSheet();
   if (view.type === "add") els.sheet.innerHTML = addAssetSheet();
-  if (view.type === "settings") els.sheet.innerHTML = settingsSheet();
+  if (view.type === "settings") {
+    els.sheet.innerHTML = settingsSheet();
+    const providerSelect = els.sheet.querySelector("[data-api-url-preset]");
+    if (providerSelect) syncAPIUrlPreset(providerSelect);
+  }
   if (view.type === "thesisContext") {
     els.sheet.innerHTML = state.thesisContext
       ? thesisContextSheet(state.thesisContext, { sheetHeader, escapeHtml })
@@ -705,7 +880,7 @@ async function loadImportanceDay(date) {
     const body = await api(`/assets/${state.assetId}/importance/${encodeURIComponent(date)}`);
     if (state.sheetView?.type === "importanceDay" && state.sheetView.date === date) {
       state.sheetData = body;
-      els.sheet.innerHTML = dailyImportanceSheet(body, { sheetHeader, escapeHtml });
+      els.sheet.innerHTML = dailyImportanceSheet(body, { sheetHeader, escapeHtml, aiEnabled });
     }
   } catch (error) {
     showToast(error.message, "error");
@@ -791,95 +966,195 @@ function parseSSEBlock(block) {
   try { return { event, data: JSON.parse(data || "{}") }; } catch { return { event, data: { message: data } }; }
 }
 
+const AI_ERROR_MESSAGES = {
+  not_configured: "请先配置并启用 AI 分析。",
+  auth: "API Key 无效或没有模型权限，请检查本地配置。",
+  model: "模型名称不被该服务支持；智谱请填写账号可用的 GLM 模型，例如 glm-4-flash。",
+  network: "无法连接模型服务，请检查网络或 API 地址。",
+  quota: "模型额度或频率受限，请稍后重试或更换模型。",
+  timeout: "模型响应超时；如果选择 OpenAI 官方，当前服务器可能无法直连，请改用 DeepSeek、智谱、通义或自定义可访问地址。",
+  schema: "模型返回格式异常，请重试或更换模型。",
+};
+
+function aiErrorMessage(data) {
+  return AI_ERROR_MESSAGES[data?.category] || data?.message || "AI 服务暂时不可用，请稍后重试。";
+}
+
+function loadLocalAIState() {
+  const workspace = state.assetId ? loadAssetAI(state.assetId) : { messages: [], analyses: [] };
+  state.localMessages = workspace.messages;
+  state.localAnalyses = workspace.analyses;
+  const latest = [...workspace.analyses].reverse().find(
+    (item) => !state.selectedEventId || item.event_id === state.selectedEventId,
+  );
+  state.analysis = latest?.result || null;
+}
+
 async function stream(path, payload, onEvent) {
   state.abortController = new AbortController();
-  await streamPost(path, payload, onEvent, state.abortController.signal);
+  await streamPost(path, payload, onEvent, state.abortController.signal, aiHeaders(state.aiConfig));
 }
 
 async function runAnalysis() {
+  if (!aiEnabled()) {
+    state.aiSettingsExpanded = true;
+    openSheet("settings");
+    showToast("请先配置并启用 AI 分析", "error");
+    return;
+  }
   if (!state.assetId || !state.selectedEventId || state.busy) return;
-  const question = "请分析当前事件对我的研究判断有什么意义。";
+  const assetId = state.assetId;
+  const view = captureView(state);
   state.pending = { type: "research" };
   setGenerating(true);
   renderConversation();
   try {
-    await stream("/research/stream", { asset_id: state.assetId, event_id: state.selectedEventId }, ({ event, data }) => {
-      if (event === "failed") showToast(data.message || "分析失败；原始来源仍可查看。", "error");
+    let completed = null;
+    await stream("/research/stream", { asset_id: assetId, event_id: state.selectedEventId }, ({ event, data }) => {
+      if (event === "completed") {
+        applyIfCurrentView(state, view, () => {
+          saveAnalysis(assetId, data);
+          completed = data;
+          state.analysis = data.result;
+        });
+      }
+      if (event === "failed" && isCurrentView(state, view)) showToast(aiErrorMessage(data), "error");
     });
-    await loadOverview(state.assetId);
-    showToast("分析完成", "success");
+    if (completed) {
+      applyIfCurrentView(state, view, () => {
+        loadLocalAIState();
+        state.analysis = completed.result;
+        showToast("分析完成", "success");
+      });
+    }
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.message, "error");
+    if (isCurrentView(state, view) && error.name !== "AbortError") {
+      showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
+    }
   } finally {
-    state.pending = null;
-    state.abortController = null;
-    setGenerating(false);
-    renderConversation();
+    applyIfCurrentView(state, view, () => {
+      state.pending = null;
+      state.abortController = null;
+      setGenerating(false);
+      renderConversation();
+    });
   }
 }
 
 async function runChat(question) {
+  if (!aiEnabled()) {
+    state.aiSettingsExpanded = true;
+    openSheet("settings");
+    showToast("请先配置并启用 AI 分析", "error");
+    return;
+  }
   if (!state.assetId || state.busy || !question.trim()) return;
+  const assetId = state.assetId;
+  const view = captureView(state);
   state.pending = { type: "chat", question };
   setGenerating(true);
   renderConversation();
   requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
+  const recentMessages = boundRecentMessages(state.localMessages);
   try {
-    await stream("/chat/stream", { asset_id: state.assetId, event_id: state.selectedEventId, question }, ({ event, data }) => {
-      if (event === "failed") showToast(data.message || "回答失败；没有生成替代结论。", "error");
+    let completedResult = null;
+    await stream("/chat/stream", {
+      asset_id: assetId,
+      event_id: state.selectedEventId,
+      question,
+      recent_messages: recentMessages,
+    }, ({ event, data }) => {
+      if (event === "completed") {
+        applyIfCurrentView(state, view, () => {
+          saveConversationTurn(assetId, question, data);
+          completedResult = data;
+          state.analysis = data.result;
+        });
+      }
+      if (event === "failed" && isCurrentView(state, view)) showToast(aiErrorMessage(data), "error");
     });
-    await loadOverview(state.assetId);
-    showToast("回答完成", "success");
+    if (completedResult) {
+      applyIfCurrentView(state, view, () => {
+        loadLocalAIState();
+        state.analysis = completedResult.result;
+        showToast("回答完成", "success");
+      });
+    }
   } catch (error) {
-    if (error.name !== "AbortError") showToast(error.message, "error");
+    if (isCurrentView(state, view) && error.name !== "AbortError") {
+      showToast(error.body?.category ? aiErrorMessage(error.body) : error.message, "error");
+    }
   } finally {
-    state.pending = null;
-    state.abortController = null;
-    setGenerating(false);
-    renderConversation();
-    requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
+    applyIfCurrentView(state, view, () => {
+      state.pending = null;
+      state.abortController = null;
+      setGenerating(false);
+      renderConversation();
+      requestAnimationFrame(() => els.conversationScroll.scrollTo({ top: els.conversationScroll.scrollHeight, behavior: "smooth" }));
+    });
   }
 }
 
 async function loadAssets(preferredId = null) {
   const body = await api("/assets");
   state.assets = body.assets || [];
-  state.assetId = preferredId || state.assetId || state.assets[0]?.id || null;
+  const nextAssetId = preferredId || state.assetId || state.assets[0]?.id || null;
+  if (nextAssetId !== state.assetId) {
+    transitionAssetView(state, nextAssetId, {
+      cancelGeneration: abortGeneration,
+      loadLocalAIState,
+    });
+  }
   renderAssetPopover();
   if (state.assetId) await loadOverview(state.assetId);
   else renderConversation();
 }
 
 async function loadOverview(assetId) {
-  state.assetId = Number(assetId);
+  const requestAssetId = Number(assetId);
+  const view = { assetId: requestAssetId, generation: state.viewGeneration };
+  if (!isCurrentView(state, view)) return;
+  state.assetId = requestAssetId;
   state.overview = null;
   renderLoading();
   try {
-    const overview = await api(`/assets/${state.assetId}/overview`);
-    const theses = await api(`/assets/${state.assetId}/theses`).catch(() => ({ history: [] }));
-    const importance = await api(`/assets/${state.assetId}/importance?days=${state.importanceDays}`)
+    const overview = await api(`/assets/${requestAssetId}/overview`);
+    if (!isCurrentView(state, view)) return;
+    const theses = await api(`/assets/${requestAssetId}/theses`).catch(() => ({ history: [] }));
+    if (!isCurrentView(state, view)) return;
+    const importance = await api(`/assets/${requestAssetId}/importance?days=${state.importanceDays}`)
       .catch((error) => ({ rows: [], error: error.message }));
-    overview.thesis_history = theses.history || [];
-    state.overview = overview;
-    state.importanceRows = importance.rows || [];
-    state.importanceError = importance.error || "";
-    state.analysis = overview.latest_analysis?.result || null;
-    if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
-    renderConversation();
+    if (!applyIfCurrentView(state, view, () => {
+      overview.thesis_history = theses.history || [];
+      state.overview = overview;
+      state.importanceRows = importance.rows || [];
+      state.importanceError = importance.error || "";
+      if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
+      loadLocalAIState();
+      renderConversation();
+    })) return;
   } catch (error) {
-    state.overview = { asset: selectedAsset(), events: [] };
-    els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
+    applyIfCurrentView(state, view, () => {
+      state.overview = { asset: selectedAsset(), events: [] };
+      els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
+    });
   }
 }
 
 async function refreshData() {
   if (!state.assetId || state.busy) return;
+  const view = captureView(state);
   try {
-    await api(`/assets/${state.assetId}/refresh`, { method: "POST" });
-    await loadOverview(state.assetId);
-    showToast("数据已刷新", "success");
+    await runCurrentViewRefresh(
+      state,
+      view,
+      () => api(`/assets/${view.assetId}/refresh`, { method: "POST" }),
+      (assetId) => loadOverview(assetId),
+      () => showToast("数据已刷新", "success"),
+      (error) => showToast(error.message, "error"),
+    );
   } catch (error) {
-    showToast(error.message, "error");
+    if (isCurrentView(state, view)) showToast(error.message, "error");
   }
 }
 
@@ -929,17 +1204,13 @@ async function saveThesis(form) {
   }
 }
 
-function selectAsset(assetId) {
+export function selectAsset(assetId) {
   const id = Number(assetId);
   if (!state.assets.some((asset) => asset.id === id)) return;
-  if (state.busy) abortGeneration();
-  state.assetId = id;
-  state.selectedEventId = null;
-  state.analysis = null;
-  state.thesisContext = null;
-  state.thesisDraft = null;
-  state.thesisAcceptedChanges = {};
-  state.overview = null;
+  transitionAssetView(state, id, {
+    cancelGeneration: abortGeneration,
+    loadLocalAIState,
+  });
   state.popoverOpen = false;
   els.assetPopover.classList.remove("is-open");
   els.assetSwitcher.setAttribute("aria-expanded", "false");
@@ -970,19 +1241,20 @@ function setFixedRect(element, left, top, width, height) {
 }
 
 function renderTourPopover() {
-  const step = tourSteps[state.tourIndex];
-  const isLast = state.tourIndex === tourSteps.length - 1;
+  const step = state.tourSteps[state.tourIndex];
+  const isLast = state.tourIndex === state.tourSteps.length - 1;
+  const nextLabel = isLast && step.action === "open-ai-settings" ? "打开 AI 设置" : isLast ? "开始使用" : "下一步";
   els.tourPopover.innerHTML = `
-    <div class="tour-step">${state.tourIndex + 1} / ${tourSteps.length}</div>
+    <div class="tour-step">${state.tourIndex + 1} / ${state.tourSteps.length}</div>
     <h2 class="tour-title" id="tour-title">${step.title}</h2>
     <p class="tour-body" id="tour-body">${step.body}</p>
-    <div class="tour-actions"><button class="tour-skip pressable" type="button" data-tour-skip>跳过</button>${state.tourIndex > 0 ? '<button class="tour-back pressable" type="button" data-tour-prev>上一步</button>' : '<span aria-hidden="true"></span>'}<button class="tour-next pressable" type="button" data-tour-next>${isLast ? "开始使用" : "下一步"}</button></div>
+    <div class="tour-actions"><button class="tour-skip pressable" type="button" data-tour-skip>跳过</button>${state.tourIndex > 0 ? '<button class="tour-back pressable" type="button" data-tour-prev>上一步</button>' : '<span aria-hidden="true"></span>'}<button class="tour-next pressable" type="button" data-tour-next>${nextLabel}</button></div>
   `;
 }
 
 function positionTour() {
   if (!state.tourActive) return;
-  const step = tourSteps[state.tourIndex];
+  const step = state.tourSteps[state.tourIndex];
   const target = document.querySelector(step.target);
   if (!target) return;
   const rect = target.getBoundingClientRect();
@@ -1004,7 +1276,9 @@ function positionTour() {
   const spacing = 18;
   const canPlaceBelow = bottom + spacing + bubbleHeight <= window.innerHeight - edge;
   const placement = canPlaceBelow ? "bottom" : "top";
-  const bubbleTop = canPlaceBelow ? bottom + spacing : Math.max(edge, top - spacing - bubbleHeight);
+  const preferredTop = canPlaceBelow ? bottom + spacing : top - spacing - bubbleHeight;
+  const maxBubbleTop = Math.max(edge, window.innerHeight - bubbleHeight - edge);
+  const bubbleTop = Math.max(edge, Math.min(preferredTop, maxBubbleTop));
   const idealLeft = left + (right - left) / 2 - bubbleWidth / 2;
   const bubbleLeft = Math.max(edge, Math.min(idealLeft, window.innerWidth - bubbleWidth - edge));
   const arrowLeft = Math.max(26, Math.min(left + (right - left) / 2 - bubbleLeft, bubbleWidth - 26));
@@ -1016,16 +1290,16 @@ function positionTour() {
 
 function showTourStep(index) {
   if (!state.tourActive) return;
-  state.tourIndex = Math.max(0, Math.min(index, tourSteps.length - 1));
-  const target = document.querySelector(tourSteps[state.tourIndex].target);
+  state.tourIndex = Math.max(0, Math.min(index, state.tourSteps.length - 1));
+  const target = document.querySelector(state.tourSteps[state.tourIndex].target);
   if (!target) {
-    if (state.tourIndex < tourSteps.length - 1) showTourStep(state.tourIndex + 1);
+    if (state.tourIndex < state.tourSteps.length - 1) showTourStep(state.tourIndex + 1);
     else finishTour(false);
     return;
   }
   const rect = target.getBoundingClientRect();
   if ((rect.top < 8 || rect.bottom > window.innerHeight - 8) && !target.closest(".topbar") && !target.closest(".composer-dock")) {
-    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.scrollIntoView({ block: "center", behavior: "auto" });
   }
   renderTourPopover();
   requestAnimationFrame(() => {
@@ -1034,22 +1308,35 @@ function showTourStep(index) {
   });
 }
 
-function startTour(force = false) {
-  const storageKey = "tradingbuddy-tour-complete-v1";
-  if (state.tourActive || (!force && localStorage.getItem(storageKey) === "true")) return;
+function tourWasSeen(storageKey) {
+  try { return localStorage.getItem(storageKey) === "true"; }
+  catch { return false; }
+}
+
+function rememberTour(storageKey) {
+  try { localStorage.setItem(storageKey, "true"); }
+  catch { /* Source browsing remains usable when storage is blocked. */ }
+}
+
+function startTour(kind = aiEnabled() ? "ai" : "sources", force = false) {
+  const storageKey = kind === "ai" ? AI_TOUR_KEY : SOURCE_TOUR_KEY;
+  if (state.tourActive || (!force && tourWasSeen(storageKey))) return;
+  const candidates = kind === "ai" ? aiTourSteps : sourceTourSteps;
+  state.tourSteps = candidates.filter((step) => document.querySelector(step.target));
+  if (!state.tourSteps.length) return;
   clearTimeout(state.tourCloseTimer);
   state.tourReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   closeAssetPopover();
   closeSheet();
   state.tourActive = true;
+  state.tourKind = kind;
   state.tourIndex = 0;
   els.tourLayer.hidden = false;
   els.appShell.inert = true;
   renderTourPopover();
   requestAnimationFrame(() => {
     els.tourLayer.classList.add("is-active");
-    positionTour();
-    els.tourPopover.querySelector("[data-tour-next]")?.focus();
+    showTourStep(0);
   });
 }
 
@@ -1058,11 +1345,29 @@ function finishTour(completed = true) {
   state.tourActive = false;
   els.appShell.inert = false;
   els.tourLayer.classList.remove("is-active");
-  if (completed) localStorage.setItem("tradingbuddy-tour-complete-v1", "true");
+  if (completed) rememberTour(state.tourKind === "ai" ? AI_TOUR_KEY : SOURCE_TOUR_KEY);
   state.tourCloseTimer = setTimeout(() => {
     els.tourLayer.hidden = true;
     if (state.tourReturnFocus?.isConnected) state.tourReturnFocus.focus();
   }, 190);
+}
+
+function advanceTour() {
+  if (!state.tourActive) return;
+  const step = state.tourSteps[state.tourIndex];
+  const opensAISettings = state.tourKind === "sources" && step?.action === "open-ai-settings";
+  if (state.tourIndex !== state.tourSteps.length - 1) {
+    showTourStep(state.tourIndex + 1);
+    return;
+  }
+  finishTour(true);
+  if (opensAISettings) {
+    state.tourReturnFocus = null;
+    state.aiSettingsExpanded = true;
+    const settingsTrigger = document.querySelector('[data-tour="settings"]');
+    openSheet("settings", settingsTrigger);
+    requestAnimationFrame(() => els.sheet.querySelector("#ai-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
 }
 
 function trapTourFocus(event) {
@@ -1108,6 +1413,11 @@ els.promptInput.addEventListener("keydown", (event) => {
   }
 });
 
+document.addEventListener("change", (event) => {
+  const apiPreset = event.target.closest?.("[data-api-url-preset]");
+  if (apiPreset) syncAPIUrlPreset(apiPreset);
+});
+
 document.addEventListener("click", (event) => {
   const assetButton = event.target.closest("[data-asset]");
   const promptButton = event.target.closest("[data-prompt]");
@@ -1118,11 +1428,38 @@ document.addEventListener("click", (event) => {
   const sourceLink = event.target.closest("[data-source-id]");
   const periodButton = event.target.closest("[data-chart-period]");
   const action = event.target.closest("[data-action]");
+  const aiToggle = event.target.closest("[data-ai-toggle]");
+  const apiKeyToggle = event.target.closest("[data-toggle-api-key]");
+  const clearAIButton = event.target.closest("[data-clear-ai]");
+  const replayAITourButton = event.target.closest("[data-replay-ai-tour]");
 
-  if (event.target.closest("[data-start-tour]")) startTour(true);
+  if (event.target.closest("[data-start-tour]")) startTour(aiEnabled() ? "ai" : "sources", true);
   if (event.target.closest("[data-tour-skip]")) finishTour(true);
   if (event.target.closest("[data-tour-prev]")) showTourStep(state.tourIndex - 1);
-  if (event.target.closest("[data-tour-next]")) state.tourIndex === tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
+  const tourNext = event.target.closest("[data-tour-next]");
+  if (tourNext) advanceTour();
+  if (aiToggle) {
+    if (aiEnabled()) turnOffAI(aiToggle);
+    else {
+      const focusTarget = captureSheetFocus(aiToggle);
+      state.aiSettingsExpanded = true;
+      renderSheet();
+      restoreSheetFocus(focusTarget);
+    }
+  }
+  if (apiKeyToggle) {
+    const input = apiKeyToggle.closest(".secret-field")?.querySelector("input[name=api_key]");
+    if (input) {
+      const visible = input.type === "text";
+      input.type = visible ? "password" : "text";
+      apiKeyToggle.textContent = visible ? "显示" : "隐藏";
+    }
+  }
+  if (clearAIButton) clearAISettings(clearAIButton);
+  if (replayAITourButton) {
+    closeSheet();
+    requestAnimationFrame(() => startTour(aiEnabled() ? "ai" : "sources", true));
+  }
   if (assetButton) {
     selectAsset(assetButton.dataset.asset);
     closeAssetPopover();
@@ -1147,7 +1484,7 @@ document.addEventListener("click", (event) => {
     state.sheetView = { type: "thesisHistory" };
     renderSheet();
   }
-  if (event.target.closest("[data-add-day-to-thesis]")) {
+  if (aiEnabled() && event.target.closest("[data-add-day-to-thesis]")) {
     const button = event.target.closest("[data-add-day-to-thesis]");
     addImportanceDayToThesis(button.dataset.addDayToThesis, button);
   }
@@ -1168,7 +1505,10 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-action='select-event']")) {
     state.selectedEventId = event.target.closest("[data-action='select-event']").dataset.eventId;
     state.readEvents.add(state.selectedEventId);
-    renderConversation();
+    if (aiEnabled()) {
+      loadLocalAIState();
+      renderConversation();
+    }
   }
   if (event.target.closest("[data-action='refresh']")) refreshData();
   if (event.target.closest("[data-action='add-search-result']")) addAsset(event.target.closest("[data-action='add-search-result']").dataset.code);
@@ -1193,6 +1533,10 @@ document.addEventListener("submit", (event) => {
     event.preventDefault();
     confirmThesisVersion(event.target);
   }
+  if (event.target.id === "ai-settings-form") {
+    event.preventDefault();
+    saveAISettings(event.target);
+  }
 });
 
 document.addEventListener("blur", (event) => {
@@ -1207,7 +1551,11 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") finishTour(true);
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      state.tourIndex === tourSteps.length - 1 ? finishTour(true) : showTourStep(state.tourIndex + 1);
+      advanceTour();
+    }
+    if (event.key === "Enter" && event.target === els.tourPopover.querySelector("[data-tour-next]")) {
+      event.preventDefault();
+      advanceTour();
     }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -1224,8 +1572,15 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("resize", () => requestAnimationFrame(positionTour));
 els.conversationScroll.addEventListener("scroll", () => requestAnimationFrame(positionTour), { passive: true });
 
-loadAssets().then(() => {
-  requestAnimationFrame(() => setTimeout(() => startTour(false), 260));
+function initializeLocalMode() {
+  state.aiConfig = loadAIConfig();
+  loadLocalAIState();
+  syncAIMode();
+  return loadAssets();
+}
+
+initializeLocalMode().then(() => {
+  requestAnimationFrame(() => setTimeout(() => startTour(), 260));
 }).catch((error) => {
   els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>启动失败</div><h1>研究工作区暂时无法加载。</h1><p class="error-callout message-error">${escapeHtml(error.message)}</p></article>`;
 });

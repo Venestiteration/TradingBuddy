@@ -1,6 +1,6 @@
 const LABELS = { public: "公开动态", upstream: "上下游", market: "行情", cross_asset: "跨资产" };
 
-export function dailyImportanceSheet(data, { sheetHeader, escapeHtml }) {
+export function dailyImportanceSheet(data, { sheetHeader, escapeHtml, aiEnabled = () => true }) {
   const cards = (data.categories || []).map((item) => `
     <button class="importance-category-card pressable" type="button"
       data-importance-category="${escapeHtml(item.category)}" data-importance-date="${escapeHtml(data.date)}">
@@ -11,11 +11,14 @@ export function dailyImportanceSheet(data, { sheetHeader, escapeHtml }) {
     <button class="importance-signal-row pressable" type="button"
       data-importance-category="${escapeHtml(signal.category)}" data-importance-date="${escapeHtml(data.date)}">
       <strong>${escapeHtml(signal.title)}</strong><span>${escapeHtml(signal.summary)}</span></button>`).join("");
+  const thesisDraftAction = aiEnabled()
+    ? `<button class="secondary-button pressable" type="button" data-add-day-to-thesis="${escapeHtml(data.date)}">用于判断草稿</button>`
+    : "";
   return `${sheetHeader("研究重要性", `${data.date} · ${Math.round(data.composite_score)}`, true)}
     <div class="sheet-body"><div class="importance-category-grid">${cards}</div>
     <section class="detail-section"><span class="detail-eyebrow">当日关键内容</span>
       ${signals || '<p class="muted">暂无新内容，分数来自行情或历史衰减。</p>'}
-    </section><button class="secondary-button pressable" type="button" data-add-day-to-thesis="${escapeHtml(data.date)}">用于判断草稿</button></div>`;
+    </section>${thesisDraftAction}</div>`;
 }
 
 export function categoryImportanceSheet(data, { sheetHeader, escapeHtml }) {

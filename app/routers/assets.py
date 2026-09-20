@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from .. import database as db
 from ..config import settings
-from ..services.ai import IMPACT_LABELS
 from ..services.events import collect_events
 from ..services.market import MarketDataError, market_service, normalize_code
 
@@ -53,13 +52,10 @@ def _current_thesis(asset_id: int) -> dict | None:
 
 @router.get("/health")
 def health() -> dict:
-    configured = bool(settings.openai_api_key and settings.openai_model)
     return {
         "status": "ok",
         "app": "AI 投研助手 MVP",
-        "openai_configured": configured,
-        "openai_model": settings.openai_model or None,
-        "openai_base_url": settings.openai_base_url or None,
+        "visitor_ai_supported": True,
         "database": str(settings.db_file),
         "time": db.utcnow(),
     }
@@ -138,23 +134,8 @@ def delete_asset(asset_id: int) -> dict:
     return {"deleted": asset_id}
 
 
-def _parse_analyses(rows: list[dict]) -> list[dict]:
-    parsed = []
-    for row in rows:
-        try:
-            result = json.loads(row["result"])
-        except json.JSONDecodeError:
-            continue
-        parsed.append({
-            **row,
-            "result": result,
-            "impact_label": IMPACT_LABELS.get(result.get("impact_state"), "信息不足"),
-        })
-    return parsed
-
-
 def build_overview(asset: dict, use_cache: bool = True) -> dict:
-    """组装单标的全量视图：行情、事件、判断、最近分析与对话。"""
+    """组装单标的全量视图：行情、事件和用户判断。"""
     asset = dict(asset)
     code = asset["stock_code"]
     name = asset["stock_name"]
@@ -191,18 +172,6 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
         errors["events"] = "行情不可用，事件未抓取"
 
     thesis = _current_thesis(asset["id"])
-    analyses = _parse_analyses(db.query(
-        "SELECT id, event_id, evidence_fingerprint, thesis_version, mode, model, "
-        "validation, created_at, result FROM analyses "
-        "WHERE asset_id = ? ORDER BY created_at DESC LIMIT 10",
-        (asset["id"],),
-    ))
-    messages = db.query(
-        "SELECT id, role, content, event_id, analysis_id, created_at FROM messages "
-        "WHERE asset_id = ? ORDER BY created_at DESC LIMIT 50",
-        (asset["id"],),
-    )
-    messages.reverse()
 
     return {
         "asset": asset,
@@ -210,10 +179,7 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
         "history": history,
         "events": events_payload.get("events", []),
         "event_errors": events_payload.get("errors", []),
-        "latest_analysis": analyses[0] if analyses else None,
-        "analyses": analyses,
         "thesis": thesis,
-        "messages": messages,
         "errors": errors,
         "data_time": (history or {}).get("data_time"),
         "fetched_at": db.utcnow(),

@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>动态 · TradingBuddy</title>
-  <link rel="stylesheet" href="/styles.css?v=20260913-scroll-fix">
+  <title>TradingBuddy</title>
+  <link rel="stylesheet" href="/styles.css?v=20260920-visitor-ai">
 </head>
 <body data-api-root="/api">
   <div class="app-shell">
@@ -13,7 +13,7 @@
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none"><path d="M5 16.5 9.2 6l3.1 7.3 2.1-4.8L19 19" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </span>
-        <span>动态</span>
+        <span>TradingBuddy</span>
       </div>
       <div class="asset-control">
         <button id="asset-switcher" class="asset-switcher pressable" type="button" aria-haspopup="listbox" aria-expanded="false" data-tour="asset">
@@ -29,7 +29,7 @@
         <button class="icon-button pressable" type="button" data-sheet="archive" data-tour="archive" aria-label="研究档案" title="研究档案">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8.5 18.5h7M9 21h6M8 14.2a6.5 6.5 0 1 1 8 0c-1 .75-1.35 1.55-1.5 2.3h-5c-.15-.75-.5-1.55-1.5-2.3Z" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <button class="icon-button pressable" type="button" data-sheet="settings" aria-label="设置" title="设置">
+        <button class="icon-button pressable" type="button" data-sheet="settings" data-tour="settings" aria-label="设置" title="设置">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.65"/><path d="M19 13.2v-2.4l-2.1-.7a7 7 0 0 0-.6-1.4l1-2-1.7-1.7-2 1a7 7 0 0 0-1.4-.6L11.5 3h-2.4l-.7 2.1a7 7 0 0 0-1.4.6l-2-1-1.7 1.7-1 2 2.1.7a7 7 0 0 0-.6 1.4l-2.1.7v2.4l2.1.7a7 7 0 0 0 .6 1.4l-1 2L5 18.7l2-1a7 7 0 0 0 1.4.6l.7 2.1h2.4l.7-2.1a7 7 0 0 0 1.4-.6l2 1 1.7-1.7-1-2a7 7 0 0 0 .6-1.4l2.1-.7Z" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
@@ -38,7 +38,7 @@
       <div class="conversation-scroll">
         <main id="conversation" class="conversation" aria-live="polite"></main>
       </div>
-      <div class="composer-dock">
+      <div id="composer-dock" class="composer-dock" hidden>
         <form id="composer" class="composer chrome" data-tour="composer">
           <textarea name="prompt" aria-label="继续追问" placeholder="继续问关于当前标的的问题…"></textarea>
           <button class="send-button pressable" type="submit" aria-label="发送">
@@ -60,6 +60,6 @@
     <div id="tour-blocker" class="tour-blocker" aria-hidden="true"></div>
     <section id="tour-popover" class="tour-popover" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body"></section>
   </div>
-  <script type="module" src="/app.js?v=20260913-importance"></script>
+  <script type="module" src="/app.js?v=20260920-zhipu-model-defaults"></script>
 </body>
 </html>

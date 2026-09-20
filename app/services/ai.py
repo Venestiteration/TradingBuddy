@@ -4,11 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Callable, Generator
+from typing import Any, Generator
+from urllib.parse import urlparse
+
+import httpx
 
 from .. import database as db
 from ..config import settings
 from .evidence import get_evidence
+from .visitor_ai import VisitorAIConfig
 
 ANALYSIS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -73,50 +77,81 @@ TRADING_PATTERN = re.compile(
 )
 
 
-class AINotConfigured(RuntimeError):
-    pass
-
-
 class AIError(RuntimeError):
     def __init__(self, category: str, message: str):
         super().__init__(message)
-        self.category = category  # timeout / quota / schema / network / unknown
-
-
-def is_configured() -> bool:
-    return bool(settings.openai_api_key and settings.openai_model)
+        self.category = category  # timeout / quota / schema / model / network / unknown
 
 
 def evidence_fingerprint(evidence_ids: list[str]) -> str:
     return hashlib.sha1("|".join(sorted(evidence_ids)).encode("utf-8")).hexdigest()[:20]
 
 
-def _client():
+def _pin_request_to_validated_ip(config: VisitorAIConfig):
+    parsed = urlparse(config.base_url)
+    expected_host = parsed.hostname or ""
+    authority = expected_host
+    if parsed.port and parsed.port != 443:
+        authority = f"{authority}:{parsed.port}"
+
+    def pin(request: httpx.Request) -> None:
+        if request.url.host != expected_host:
+            raise AIError("network", "模型请求目标与已验证地址不一致")
+        request.headers["Host"] = authority
+        request.extensions["sni_hostname"] = expected_host
+        request.url = request.url.copy_with(host=config.resolved_ips[0])
+
+    return pin
+
+
+def _client(config: VisitorAIConfig):
     try:
         from openai import OpenAI
     except ImportError as exc:  # pragma: no cover
         raise AIError("unknown", "未安装 openai Python 包") from exc
+    http_client = httpx.Client(
+        follow_redirects=False,
+        trust_env=False,
+        timeout=settings.ai_timeout_seconds,
+        event_hooks={"request": [_pin_request_to_validated_ip(config)]},
+    )
     return OpenAI(
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
+        api_key=config.api_key,
+        base_url=config.base_url,
         timeout=settings.ai_timeout_seconds,
         max_retries=1,
+        http_client=http_client,
     )
 
 
-def _uses_zhipu_chat_api() -> bool:
-    base_url = (settings.openai_base_url or "").lower()
-    return "bigmodel.cn" in base_url or "zhipu" in base_url
+def _close_client(client: Any) -> None:
+    try:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    except Exception:
+        pass
 
 
-def _zhipu_extra_body() -> dict[str, Any]:
-    """为不同智谱模型选择可用的思考参数。"""
-    model = (settings.openai_model or "").lower()
-    if model.startswith("glm-5.3"):
+def _uses_zhipu_chat_api(config: VisitorAIConfig) -> bool:
+    value = config.base_url.lower()
+    return "bigmodel.cn" in value or "zhipu" in value
+
+
+def _uses_chat_api(config: VisitorAIConfig) -> bool:
+    # 保持对旧版手工构造 VisitorAIConfig 的兼容；请求依赖会为新配置显式设置 api_mode。
+    return config.api_mode == "chat" or _uses_zhipu_chat_api(config)
+
+
+def _zhipu_extra_body(config: VisitorAIConfig) -> dict[str, Any] | None:
+    """仅为明确支持的智谱推理模型设置思考参数。"""
+    if config.model.lower().startswith("glm-5.3"):
         # glm-5.3 强制思考，不能传 thinking=disabled；降低推理预算，
         # 给结构化 JSON 正文留出足够的 completion tokens。
         return {"reasoning_effort": "low"}
-    return {"thinking": {"type": "disabled"}}
+    # 普通模型（例如 glm-4-flash）不强行注入 thinking 参数，避免不同
+    # 模型版本因不支持该扩展字段而直接返回 400。
+    return None
 
 
 def _parse_json_response(raw: Any) -> dict:
@@ -154,6 +189,7 @@ def _parse_json_response(raw: Any) -> dict:
 
 
 def call_structured_model(
+    config: VisitorAIConfig,
     instructions: str,
     context: dict,
     schema: dict[str, Any],
@@ -161,15 +197,15 @@ def call_structured_model(
     max_tokens: int = 2400,
 ) -> dict:
     """按指定 JSON Schema 调用模型，兼容 OpenAI Responses 与智谱 Chat API。"""
-    client = _client()
+    client = _client(config)
     try:
-        if _uses_zhipu_chat_api():
+        if _uses_chat_api(config):
             # 智谱兼容 OpenAI 的 Chat Completions，但不提供项目原先调用的
             # /responses 路径。使用 JSON mode，再由 validate_result 做字段
             # 和证据引用的二次校验。
-            response = client.chat.completions.create(
-                model=settings.openai_model,
-                messages=[
+            chat_kwargs = {
+                "model": config.model,
+                "messages": [
                     {
                         "role": "system",
                         "content": (
@@ -182,15 +218,19 @@ def call_structured_model(
                         "content": json.dumps(context, ensure_ascii=False, default=str),
                     },
                 ],
-                response_format={"type": "json_object"},
-                extra_body=_zhipu_extra_body(),
-                temperature=0.2,
-                max_tokens=max_tokens,
-            )
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2,
+                "max_tokens": max_tokens,
+            }
+            if _uses_zhipu_chat_api(config):
+                extra_body = _zhipu_extra_body(config)
+                if extra_body:
+                    chat_kwargs["extra_body"] = extra_body
+            response = client.chat.completions.create(**chat_kwargs)
             raw = response.choices[0].message.content
         else:
             response = client.responses.create(
-                model=settings.openai_model,
+                model=config.model,
                 instructions=instructions,
                 input=json.dumps(context, ensure_ascii=False, default=str),
                 text={
@@ -215,20 +255,31 @@ def call_structured_model(
                 raw = "".join(chunks)
     except Exception as exc:
         text = str(exc)
-        if "timeout" in text.lower() or isinstance(exc, TimeoutError):
+        lowered = text.lower()
+        if "timeout" in lowered or isinstance(exc, TimeoutError):
             raise AIError("timeout", "模型调用超时") from exc
-        if "quota" in text.lower() or "insufficient" in text.lower() or "429" in text:
+        if "quota" in lowered or "insufficient" in lowered or "429" in text:
             raise AIError("quota", "模型额度或频率受限") from exc
-        if "api key" in text.lower() or "401" in text:
-            raise AIError("network", "API Key 无效或未配置") from exc
+        if "api key" in lowered or "401" in text or "403" in text:
+            raise AIError("auth", "API Key 无效或没有模型权限") from exc
+        if (
+            ("model" in lowered and any(marker in lowered for marker in ("not found", "does not exist", "invalid")))
+            or "模型不存在" in text
+            or "模型不支持" in text
+            or "1210" in text
+        ):
+            raise AIError("model", "模型名称不被该服务支持，请检查模型名称") from exc
         raise AIError("network", f"模型调用失败: {text[:200]}") from exc
+    finally:
+        _close_client(client)
 
     return _parse_json_response(raw)
 
 
-def _call_model(instructions: str, context: dict) -> dict:
+def _call_model(config: VisitorAIConfig, instructions: str, context: dict) -> dict:
     """调用投研分析模型并解析既有分析结构。"""
     return call_structured_model(
+        config,
         instructions,
         context,
         ANALYSIS_SCHEMA,
@@ -366,6 +417,7 @@ def _sse(event_name: str, payload: dict) -> str:
 
 
 def run_grounded_stream(
+    config: VisitorAIConfig,
     mode: str,                      # research / chat
     asset: dict,
     question: str,
@@ -374,7 +426,6 @@ def run_grounded_stream(
     thesis: dict | None,
     recent_messages: list[dict],
     snapshot: dict | None,
-    save_result: Callable[[dict, str], int] | None = None,
 ) -> Generator[str, None, None]:
     """执行一次真实模型调用，按 SSE 状态推进，结束时产出 completed / failed 事件。"""
     instructions = settings.prompt_path.read_text(encoding="utf-8")
@@ -387,19 +438,12 @@ def run_grounded_stream(
 
     yield _sse("status", {"state": "context_ready", "evidence_count": len(lookup)})
 
-    if not is_configured():
-        yield _sse("failed", {
-            "category": "not_configured",
-            "message": "尚未配置 OPENAI_API_KEY 或 OPENAI_MODEL，请在 .env 中配置后重启服务。当前仅可查看行情、事件与原始来源。",
-        })
-        return
-
-    yield _sse("status", {"state": "model_running", "model": settings.openai_model})
+    yield _sse("status", {"state": "model_running", "model": config.model})
     result: dict | None = None
     last_error: AIError | None = None
     for attempt in range(2):  # 校验失败允许重试一次
         try:
-            candidate = _call_model(instructions, context)
+            candidate = _call_model(config, instructions, context)
         except AIError as exc:
             last_error = exc
             break  # 网络/额度类错误重试无意义
@@ -425,17 +469,13 @@ def run_grounded_stream(
         yield _sse("failed", {"category": category, "message": message})
         return
 
-    analysis_id = None
-    if save_result:
-        analysis_id = save_result(result, fingerprint)
     yield _sse("completed", {
         "mode": mode,
         "question": question,
-        "analysis_id": analysis_id,
         "event_id": (event or {}).get("event_id"),
         "evidence_fingerprint": fingerprint,
         "thesis_version": thesis_version,
-        "model": settings.openai_model,
+        "model": config.model,
         "created_at": db.utcnow(),
         "result": result,
         "impact_label": IMPACT_LABELS.get(result["impact_state"], "信息不足"),

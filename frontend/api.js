@@ -17,16 +17,19 @@ export async function api(path, options = {}) {
   return body;
 }
 
-export async function streamPost(path, payload, onEvent, signal) {
+export async function streamPost(path, payload, onEvent, signal, headers = {}) {
   const response = await fetch(`${API_ROOT}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...headers },
     body: JSON.stringify(payload),
     signal,
   });
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `请求失败（${response.status}）`);
+    const error = new Error(body.detail || `请求失败（${response.status}）`);
+    error.status = response.status;
+    error.body = body;
+    throw error;
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

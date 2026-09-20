@@ -1,16 +1,15 @@
 """首轮研究分析：对选中事件生成结构化分析（SSE）。"""
 from __future__ import annotations
 
-import json
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import database as db
-from ..config import settings
 from ..services.ai import run_grounded_stream
 from ..services.evidence import get_evidence
+from ..services.visitor_ai import VisitorAIConfig, visitor_ai_config
 from .assets import _asset_row, _current_thesis
 
 router = APIRouter(prefix="/api")
@@ -34,19 +33,16 @@ def _sse_response(generator):
 
 
 @router.post("/research/stream")
-def research_stream(payload: ResearchRequest) -> StreamingResponse:
+def research_stream(
+    payload: ResearchRequest,
+    config: Annotated[VisitorAIConfig, Depends(visitor_ai_config)],
+) -> StreamingResponse:
     asset = _asset_row(payload.asset_id)
     event_evidence = get_evidence(payload.event_id)
     if not event_evidence or event_evidence["stock_code"] != asset["stock_code"]:
         raise HTTPException(status_code=404, detail="事件不存在或不属于当前标的")
 
     thesis = _current_thesis(asset["id"])
-    recent = db.query(
-        "SELECT role, content FROM messages WHERE asset_id = ? ORDER BY created_at DESC LIMIT 6",
-        (asset["id"],),
-    )
-    recent.reverse()
-
     # 行情上下文：允许失败（AI 仍可基于事件证据分析）
     snapshot = None
     try:
@@ -56,18 +52,8 @@ def research_stream(payload: ResearchRequest) -> StreamingResponse:
     except Exception:
         pass
 
-    def save_result(result: dict, fingerprint: str) -> int:
-        return db.execute(
-            "INSERT INTO analyses (asset_id, event_id, evidence_fingerprint, thesis_version, "
-            "mode, model, result, validation, created_at) VALUES (?, ?, ?, ?, 'research', ?, ?, ?, ?)",
-            (
-                asset["id"], payload.event_id, fingerprint,
-                (thesis or {}).get("version"), settings.openai_model, json.dumps(result, ensure_ascii=False),
-                "passed", db.utcnow(),
-            ),
-        )
-
     generator = run_grounded_stream(
+        config=config,
         mode="research",
         asset=dict(asset),
         question=f"请分析事件「{event_evidence['title']}」对当前行情和用户判断的意义。",
@@ -79,8 +65,7 @@ def research_stream(payload: ResearchRequest) -> StreamingResponse:
         },
         evidence_items=[event_evidence],
         thesis=thesis,
-        recent_messages=recent,
+        recent_messages=[],
         snapshot=snapshot,
-        save_result=save_result,
     )
     return _sse_response(generator)

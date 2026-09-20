@@ -5,6 +5,7 @@ import json
 
 from .. import database as db
 from .ai import call_structured_model
+from .visitor_ai import VisitorAIConfig
 
 ALLOWED_CHANGE_TYPES = {"added", "modified", "removed", "unchanged"}
 
@@ -75,10 +76,15 @@ def validate_suggestion(result: dict, message_ids: set[int], evidence_ids: set[s
 
 
 def generate_suggestion(
-    base_version: int, thesis: dict | None, messages: list[dict], evidence: list[dict]
+    config: VisitorAIConfig,
+    base_version: int,
+    thesis: dict | None,
+    messages: list[dict],
+    evidence: list[dict],
 ) -> dict:
     """让模型提出判断变化建议，但不允许它直接产生交易建议。"""
     result = call_structured_model(
+        config,
         instructions=(
             "比较用户已确认判断与所选对话、证据，只整理对判断的新增、修改、删除或不变建议。"
             "不要提供买卖、仓位、目标价或交易时点建议。每项建议必须引用输入中的消息或证据编号。"
