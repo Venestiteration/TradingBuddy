@@ -1,0 +1,14 @@
+{
+  "totalAnnouncement": 1,
+  "announcements": [
+    {
+      "announcementId": "1212345678",
+      "announcementTitle": "关于收到上海证券交易所监管工作函的公告",
+      "announcementTime": 1789404060000,
+      "adjunctUrl": "finalpage/2026-09-15/1212345678.PDF",
+      "secCode": "600519",
+      "secName": "贵州茅台",
+      "orgId": "gssh0600519"
+    }
+  ]
+}
