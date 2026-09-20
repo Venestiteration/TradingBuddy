@@ -14,6 +14,10 @@ def private_resolver(host, port, type=socket.SOCK_STREAM):
     return [(socket.AF_INET, type, 6, "", ("10.0.0.8", port))]
 
 
+def shared_resolver(host, port, type=socket.SOCK_STREAM):
+    return [(socket.AF_INET, type, 6, "", ("100.64.0.1", port))]
+
+
 class VisitorAIConfigTest(unittest.TestCase):
     def test_blank_url_uses_openai_default(self):
         config = build_visitor_ai_config("sk-user", "gpt-4.1-mini", "", resolver=public_resolver)
@@ -43,6 +47,21 @@ class VisitorAIConfigTest(unittest.TestCase):
         for url, resolver in cases:
             with self.subTest(url=url), self.assertRaises(HTTPException):
                 build_visitor_ai_config("sk-user", "model", url, resolver=resolver)
+
+    def test_shared_address_destinations_are_rejected(self):
+        with self.assertRaises(HTTPException) as caught:
+            build_visitor_ai_config(
+                "sk-user", "model", "https://api.example.com/v1", resolver=shared_resolver
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_malformed_bracketed_ipv6_url_is_rejected(self):
+        with self.assertRaises(HTTPException) as caught:
+            build_visitor_ai_config(
+                "sk-user", "model", "https://[2001:db8::1/v1", resolver=public_resolver
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertEqual(caught.exception.detail, "API 地址不是允许的公网地址")
 
     def test_length_limits_are_enforced(self):
         with self.assertRaises(HTTPException):

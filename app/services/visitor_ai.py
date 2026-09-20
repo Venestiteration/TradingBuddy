@@ -21,7 +21,7 @@ class VisitorAIConfig:
 
 def _public_ip(value: str) -> bool:
     address = ipaddress.ip_address(value)
-    return not any((
+    return address.is_global and not any((
         address.is_private,
         address.is_loopback,
         address.is_link_local,
@@ -46,7 +46,10 @@ def build_visitor_ai_config(
         raise HTTPException(status_code=400, detail="请填写有效的模型名称")
     if len(url) > 512:
         raise HTTPException(status_code=400, detail="API 地址过长")
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="API 地址不是允许的公网地址") from exc
     host = (parsed.hostname or "").lower().rstrip(".")
     if parsed.scheme != "https" or not host or parsed.username or parsed.password:
         raise HTTPException(status_code=400, detail="API 地址必须是不含凭据的 HTTPS 公网地址")
