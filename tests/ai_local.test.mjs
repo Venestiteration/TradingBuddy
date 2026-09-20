@@ -53,6 +53,16 @@ test("AI endpoint presets include common providers and preserve custom endpoints
   assert.equal(apiPresetFor("https://custom.example/v1").mode, "chat");
 });
 
+test("incomplete stored AI configuration cannot enable empty-key requests", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(AI_CONFIG_KEY, JSON.stringify({ enabled: true, model: "gpt-4.1-mini" }));
+
+  const config = loadAIConfig(storage);
+
+  assert.equal(config.enabled, false);
+  assert.throws(() => aiHeaders(config), /请先在设置中启用 AI 分析/);
+});
+
 test("disabling preserves credentials while clearing removes all AI state", () => {
   const storage = new MemoryStorage();
   saveAIConfig({ enabled: true, apiKey: "key", model: "model", baseUrl: "" }, storage);

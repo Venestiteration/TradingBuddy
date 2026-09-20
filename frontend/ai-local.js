@@ -50,14 +50,16 @@ const safeRemove = (storage, key) => {
 export function loadAIConfig(storage = null) {
   const target = storage || browserStorage();
   const value = parse(safeGet(target, AI_CONFIG_KEY), blankConfig());
+  const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim().slice(0, 512) : "";
+  const model = typeof value.model === "string" ? value.model.trim().slice(0, 128) : "";
   const baseUrl = typeof value.baseUrl === "string" ? value.baseUrl.slice(0, 512) : "";
   const apiMode = value.apiMode === "chat" || value.apiMode === "responses"
     ? value.apiMode
     : apiModeForBaseUrl(baseUrl);
   return {
-    enabled: value.enabled === true,
-    apiKey: typeof value.apiKey === "string" ? value.apiKey.slice(0, 512) : "",
-    model: typeof value.model === "string" ? value.model.slice(0, 128) : "",
+    enabled: value.enabled === true && Boolean(apiKey && model),
+    apiKey,
+    model,
     baseUrl,
     apiMode,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : "",
@@ -109,7 +111,9 @@ export function clearAIData(storage = null) {
 }
 
 export function aiHeaders(config) {
-  if (!config.enabled) throw new Error("请先在设置中启用 AI 分析");
+  if (!config.enabled || !String(config.apiKey || "").trim() || !String(config.model || "").trim()) {
+    throw new Error("请先在设置中启用 AI 分析");
+  }
   return {
     "X-TB-API-Key": config.apiKey,
     "X-TB-Model": config.model,
