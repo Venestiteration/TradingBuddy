@@ -70,6 +70,14 @@ test("importance timeline is keyboard accessible and drillable", () => {
   assert.ok(styles.includes("@media (prefers-reduced-motion: reduce)"));
 });
 
+test("public dynamics drilldown preserves the conversation shell and analysis context", () => {
+  assert.ok(app.includes("function renderDynamicMessage"));
+  assert.ok(app.includes("function renderConversation"));
+  assert.ok(app.includes('openSheet("publicDynamics"'));
+  assert.match(app, /dynamic_id:\s*selectedOverviewEvent\?\.dynamic_id/);
+  assert.match(app, /runAnalysis\(\{\s*event_id:[\s\S]*dynamic_id:\s*dynamicId/);
+});
+
 test("conversation conclusions require user confirmation before versioning", () => {
   assert.ok(app.includes("data-build-thesis-draft"));
   assert.ok(app.includes("thesisDraft"));

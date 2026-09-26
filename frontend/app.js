@@ -1,6 +1,7 @@
 import { api, streamPost } from "./api.js?v=20260920-zhipu-model-defaults";
 import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
+import { publicDynamicDetailSheet, publicDynamicsSheet } from "./public-dynamics.js";
 import {
   collectThesisForm,
   suggestionValue,
@@ -47,6 +48,7 @@ const state = {
   sheetView: null,
   sheetHistory: [],
   sheetData: null,
+  publicDynamicsKind: "all",
   archiveTab: "thesis",
   chartPeriod: "day",
   importanceRows: [],
@@ -144,6 +146,12 @@ function formatCompactVolume(value) {
 
 function selectedAsset() {
   return state.assets.find((asset) => asset.id === state.assetId) || null;
+}
+
+function getSelectedOverviewEvent() {
+  return (state.overview?.events || []).find(
+    (event) => String(event.event_id) === String(state.selectedEventId),
+  ) || null;
 }
 
 function assetKind(asset) {
@@ -858,6 +866,16 @@ function renderSheet() {
   if (view.type === "importanceCategory") {
     els.sheet.innerHTML = `${sheetHeader(view.category || "评分详情", view.date || "", true)}<div class="sheet-body"><div class="loading-state">正在读取评分因子…</div></div>`;
   }
+  if (view.type === "publicDynamics") {
+    els.sheet.innerHTML = state.sheetData
+      ? publicDynamicsSheet(state.sheetData, { sheetHeader, escapeHtml, activeKind: view.kind || "all" })
+      : `${sheetHeader("公开动态", "最近 24 小时", true)}<div class="sheet-body"><div class="loading-state">正在读取公开动态…</div></div>`;
+  }
+  if (view.type === "publicDynamicDetail") {
+    els.sheet.innerHTML = state.sheetData
+      ? publicDynamicDetailSheet(state.sheetData, { sheetHeader, escapeHtml })
+      : `${sheetHeader("动态详情", "正在读取", true)}<div class="sheet-body"><div class="loading-state">正在读取动态与来源…</div></div>`;
+  }
 }
 
 function openSheet(type, trigger = null, options = {}, pushHistory = true) {
@@ -873,6 +891,11 @@ function openSheet(type, trigger = null, options = {}, pushHistory = true) {
   if (type === "source" && options.sourceId) loadSourceDetail(options.sourceId);
   if (type === "importanceDay" && options.date) loadImportanceDay(options.date);
   if (type === "importanceCategory" && options.date && options.category) loadImportanceCategory(options.date, options.category);
+  if (type === "publicDynamics") {
+    state.publicDynamicsKind = options.kind || "all";
+    loadPublicDynamics(state.publicDynamicsKind);
+  }
+  if (type === "publicDynamicDetail" && options.dynamicId) loadPublicDynamicDetail(options.dynamicId);
 }
 
 async function loadImportanceDay(date) {
@@ -896,6 +919,74 @@ async function loadImportanceCategory(date, category) {
     }
   } catch (error) {
     showToast(error.message, "error");
+  }
+}
+
+async function loadPublicDynamics(kind = "all") {
+  const assetId = state.assetId;
+  const requestGeneration = state.viewGeneration;
+  const view = captureView(state);
+  const sheetView = { ...state.sheetView };
+  if (!assetId || sheetView.type !== "publicDynamics") return;
+  try {
+    const body = await api(`/assets/${assetId}/public-dynamics?hours=24&kind=${encodeURIComponent(kind)}`);
+    if (!isCurrentView(state, view)
+      || state.viewGeneration !== requestGeneration
+      || state.sheetView?.type !== sheetView.type
+      || state.sheetView?.kind !== sheetView.kind) return;
+    state.sheetData = body;
+    renderSheet();
+  } catch (error) {
+    if (isCurrentView(state, view)
+      && state.viewGeneration === requestGeneration
+      && state.sheetView?.type === sheetView.type
+      && state.sheetView?.kind === sheetView.kind) showToast(error.message, "error");
+  }
+}
+
+async function loadPublicDynamicDetail(dynamicId) {
+  const assetId = state.assetId;
+  const requestGeneration = state.viewGeneration;
+  const view = captureView(state);
+  const sheetView = { ...state.sheetView };
+  if (!assetId || sheetView.type !== "publicDynamicDetail") return;
+  try {
+    const body = await api(`/public-dynamics/${encodeURIComponent(dynamicId)}`);
+    if (!isCurrentView(state, view)
+      || state.viewGeneration !== requestGeneration
+      || state.sheetView?.type !== sheetView.type
+      || String(state.sheetView?.dynamicId) !== String(sheetView.dynamicId)) return;
+    state.sheetData = body;
+    renderSheet();
+  } catch (error) {
+    if (isCurrentView(state, view)
+      && state.viewGeneration === requestGeneration
+      && state.sheetView?.type === sheetView.type
+      && String(state.sheetView?.dynamicId) === String(sheetView.dynamicId)) showToast(error.message, "error");
+  }
+}
+
+async function extractPublicDynamic(dynamicId) {
+  const assetId = state.assetId;
+  const requestGeneration = state.viewGeneration;
+  const view = captureView(state);
+  const sheetView = { ...state.sheetView };
+  if (!assetId || sheetView.type !== "publicDynamicDetail") return;
+  try {
+    await api(`/public-dynamics/${encodeURIComponent(dynamicId)}/extract`, { method: "POST" });
+    if (!isCurrentView(state, view)
+      || state.viewGeneration !== requestGeneration
+      || state.sheetView?.type !== sheetView.type
+      || String(state.sheetView?.dynamicId) !== String(sheetView.dynamicId)) return;
+    await loadPublicDynamicDetail(dynamicId);
+    if (isCurrentView(state, view)
+      && state.sheetView?.type === sheetView.type
+      && String(state.sheetView?.dynamicId) === String(sheetView.dynamicId)) showToast("公告正文已更新", "success");
+  } catch (error) {
+    if (isCurrentView(state, view)
+      && state.viewGeneration === requestGeneration
+      && state.sheetView?.type === sheetView.type
+      && String(state.sheetView?.dynamicId) === String(sheetView.dynamicId)) showToast(error.message, "error");
   }
 }
 
@@ -938,6 +1029,13 @@ function backSheet() {
   if (previous.type === "importanceDay" && previous.date) loadImportanceDay(previous.date);
   if (previous.type === "importanceCategory" && previous.date && previous.category) {
     loadImportanceCategory(previous.date, previous.category);
+  }
+  if (previous.type === "publicDynamics") {
+    state.publicDynamicsKind = previous.kind || "all";
+    loadPublicDynamics(state.publicDynamicsKind);
+  }
+  if (previous.type === "publicDynamicDetail" && previous.dynamicId) {
+    loadPublicDynamicDetail(previous.dynamicId);
   }
 }
 
@@ -995,14 +1093,16 @@ async function stream(path, payload, onEvent) {
   await streamPost(path, payload, onEvent, state.abortController.signal, aiHeaders(state.aiConfig));
 }
 
-async function runAnalysis() {
+async function runAnalysis(eventOverride = null) {
   if (!aiEnabled()) {
     state.aiSettingsExpanded = true;
     openSheet("settings");
     showToast("请先配置并启用 AI 分析", "error");
     return;
   }
-  if (!state.assetId || !state.selectedEventId || state.busy) return;
+  const selectedOverviewEvent = eventOverride || getSelectedOverviewEvent();
+  const selectedEventId = selectedOverviewEvent?.event_id || state.selectedEventId;
+  if (!state.assetId || !selectedEventId || state.busy) return;
   const assetId = state.assetId;
   const view = captureView(state);
   state.pending = { type: "research" };
@@ -1010,7 +1110,11 @@ async function runAnalysis() {
   renderConversation();
   try {
     let completed = null;
-    await stream("/research/stream", { asset_id: assetId, event_id: state.selectedEventId }, ({ event, data }) => {
+    await stream("/research/stream", {
+      asset_id: assetId,
+      event_id: selectedEventId,
+      dynamic_id: selectedOverviewEvent?.dynamic_id,
+    }, ({ event, data }) => {
       if (event === "completed") {
         applyIfCurrentView(state, view, () => {
           saveAnalysis(assetId, data);
@@ -1050,6 +1154,7 @@ async function runChat(question) {
   }
   if (!state.assetId || state.busy || !question.trim()) return;
   const assetId = state.assetId;
+  const selectedOverviewEvent = getSelectedOverviewEvent();
   const view = captureView(state);
   state.pending = { type: "chat", question };
   setGenerating(true);
@@ -1061,6 +1166,7 @@ async function runChat(question) {
     await stream("/chat/stream", {
       asset_id: assetId,
       event_id: state.selectedEventId,
+      dynamic_id: selectedOverviewEvent?.dynamic_id,
       question,
       recent_messages: recentMessages,
     }, ({ event, data }) => {
@@ -1432,6 +1538,10 @@ document.addEventListener("click", (event) => {
   const apiKeyToggle = event.target.closest("[data-toggle-api-key]");
   const clearAIButton = event.target.closest("[data-clear-ai]");
   const replayAITourButton = event.target.closest("[data-replay-ai-tour]");
+  const publicKind = event.target.closest("[data-public-kind]");
+  const publicDynamic = event.target.closest("[data-public-dynamic-id]");
+  const extractDynamic = event.target.closest("[data-extract-dynamic]");
+  const analyzeDynamic = event.target.closest("[data-analyze-dynamic]");
 
   if (event.target.closest("[data-start-tour]")) startTour(aiEnabled() ? "ai" : "sources", true);
   if (event.target.closest("[data-tour-skip]")) finishTour(true);
@@ -1496,9 +1606,43 @@ document.addEventListener("click", (event) => {
     openSheet("importanceDay", importanceDay, { date: importanceDay.dataset.importanceDay });
   }
   if (importanceCategory && state.sheetView?.type === "importanceDay") {
-    openSheet("importanceCategory", importanceCategory, {
-      date: importanceCategory.dataset.importanceDate || state.sheetView.date,
-      category: importanceCategory.dataset.importanceCategory,
+    const category = importanceCategory.dataset.importanceCategory;
+    if (category === "public") {
+      openSheet("publicDynamics", importanceCategory, { kind: "all" });
+    } else {
+      openSheet("importanceCategory", importanceCategory, {
+        date: importanceCategory.dataset.importanceDate || state.sheetView.date,
+        category,
+      });
+    }
+  }
+  if (publicKind && state.sheetView?.type === "publicDynamics") {
+    const kind = publicKind.dataset.publicKind;
+    state.publicDynamicsKind = kind;
+    state.sheetView.kind = kind;
+    state.sheetData = null;
+    renderSheet();
+    loadPublicDynamics(kind);
+  }
+  if (publicDynamic && state.sheetView?.type === "publicDynamics") {
+    openSheet("publicDynamicDetail", publicDynamic, { dynamicId: publicDynamic.dataset.publicDynamicId });
+  }
+  if (extractDynamic && state.sheetView?.type === "publicDynamicDetail") {
+    extractPublicDynamic(extractDynamic.dataset.extractDynamic);
+  }
+  if (analyzeDynamic && state.sheetView?.type === "publicDynamicDetail") {
+    const dynamicId = analyzeDynamic.dataset.analyzeDynamic;
+    const matchingEvent = (state.overview?.events || []).find(
+      (item) => String(item.dynamic_id) === String(dynamicId),
+    );
+    const primaryEvidence = state.sheetData?.dynamic?.evidence?.find((item) => item.relation === "primary")
+      || state.sheetData?.dynamic?.evidence?.[0];
+    state.selectedEventId = matchingEvent?.event_id || primaryEvidence?.evidence_id || state.selectedEventId;
+    if (aiEnabled()) loadLocalAIState();
+    closeSheet();
+    runAnalysis({
+      event_id: matchingEvent?.event_id || primaryEvidence?.evidence_id,
+      dynamic_id: dynamicId,
     });
   }
   if (event.target.closest("[data-action='run-analysis']")) runAnalysis();

@@ -1,12 +1,17 @@
 const LABELS = { public: "公开动态", upstream: "上下游", market: "行情", cross_asset: "跨资产" };
 
 export function dailyImportanceSheet(data, { sheetHeader, escapeHtml, aiEnabled = () => true }) {
-  const cards = (data.categories || []).map((item) => `
-    <button class="importance-category-card pressable" type="button"
-      data-importance-category="${escapeHtml(item.category)}" data-importance-date="${escapeHtml(data.date)}">
-      <span>${LABELS[item.category]}</span><strong>${Math.round(item.score)}</strong>
-      <small>${escapeHtml(item.summary || "暂无新信息")}</small>
-    </button>`).join("");
+  const cards = (data.categories || []).map((item) => {
+    const summary = item.category === "public" && item.recent_count_24h != null
+      ? `最近 24 小时共 ${item.recent_count_24h} 条 · ${item.summary || "暂无新信息"}`
+      : item.summary || "暂无新信息";
+    return `
+      <button class="importance-category-card pressable" type="button"
+        data-importance-category="${escapeHtml(item.category)}" data-importance-date="${escapeHtml(data.date)}">
+        <span>${LABELS[item.category]}</span><strong>${Math.round(item.score)}</strong>
+        <small>${escapeHtml(summary)}</small>
+      </button>`;
+  }).join("");
   const signals = (data.signals || []).map((signal) => `
     <button class="importance-signal-row pressable" type="button"
       data-importance-category="${escapeHtml(signal.category)}" data-importance-date="${escapeHtml(data.date)}">

@@ -1111,6 +1111,27 @@ a.source-chip { display: inline-flex; align-items: center; }
   .chart-svg { min-height: 250px; }
 }
 
+.public-source-status { padding: 13px 14px; border-radius: 13px; background: var(--green-wash); }
+.public-source-status strong, .public-source-status span { display: block; }
+.public-source-status span { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.public-dynamics-counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.public-dynamics-counts span { padding: 11px; border-radius: 12px; background: var(--canvas); color: var(--muted); font-size: 11px; }
+.public-dynamics-counts strong { display: block; color: var(--ink); font-size: 20px; }
+.public-kind-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--canvas); }
+.public-kind-tabs button { flex: 1; border: 0; border-radius: 9px; padding: 8px; background: transparent; color: var(--muted); }
+.public-kind-tabs button.is-active { background: white; color: var(--ink); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.public-dynamics-list { margin-top: 6px; }
+.public-dynamic-item { display: grid; grid-template-columns: auto 1fr; gap: 7px 10px; width: 100%; padding: 15px 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
+.public-dynamic-item time { justify-self: end; color: var(--muted); font-size: 11px; }
+.public-dynamic-item strong, .public-dynamic-item > span:not(.public-kind), .public-dynamic-item small { grid-column: 1 / -1; }
+.public-dynamic-item > span:not(.public-kind) { color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+.public-dynamic-item small, .public-completeness-note { color: var(--muted); font-size: 11px; }
+.public-kind { width: fit-content; padding: 4px 7px; border-radius: 999px; color: var(--blue); background: var(--blue-wash); font-size: 10px; font-weight: 650; }
+.public-kind-news { color: #7641a4; background: #f4edfb; }
+.public-source-row { display: block; width: 100%; padding: 11px 0; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
+.public-source-row strong, .public-source-row span { display: block; }
+.public-source-row span { margin-top: 4px; color: var(--muted); font-size: 11px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;
