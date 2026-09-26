@@ -1561,7 +1561,7 @@ if not evidence_items:
 selected_event = evidence_items[0]
 ```
 
-When it is absent, execute the existing `event_id` lookup unchanged. Pass every linked evidence item to `run_grounded_stream`. Persist the canonical ID in the non-FK `analyses.event_id` and `messages.event_id` as `dynamic:{id}` only for new canonical requests; legacy requests keep the evidence ID.
+When it is absent, execute the existing `event_id` lookup unchanged. Pass every linked evidence item to `run_grounded_stream`. The canonical `dynamic_id` exists only in the current research/chat request context and must not be written to the shared `analyses` or `messages` tables. Keep legacy `event_id` behavior unchanged. Analysis and conversation results continue to follow the visitor-AI local/request-scoped privacy boundary.
 
 - [ ] **Step 6: Run compatibility and full tests**
 
