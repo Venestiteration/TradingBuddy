@@ -121,13 +121,12 @@ def _can_merge(left: dict, right: dict) -> bool:
 def _can_join_group(group: list[dict], candidate: dict) -> bool:
     if not any(_can_merge(member, candidate) for member in group):
         return False
-    media_members = [
-        member for member in [*group, candidate] if member["kind"] == "news"
-    ]
-    if len(media_members) < 2:
-        return True
-    media_times = [_parse_time(member["published_at"]) for member in media_members]
-    return (max(media_times) - min(media_times)).total_seconds() <= 36 * 3600
+    members = [*group, candidate]
+    times = [_parse_time(member["published_at"]) for member in members]
+    max_span_hours = (
+        72 if any(member["kind"] == "announcement" for member in members) else 36
+    )
+    return (max(times) - min(times)).total_seconds() <= max_span_hours * 3600
 
 
 def _evidence_rank(item: dict) -> tuple[int, int]:

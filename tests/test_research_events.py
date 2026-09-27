@@ -117,6 +117,28 @@ class ResearchEventClusteringTest(TestCase):
         self.assertIn([5, 6], [event["dynamic_ids"] for event in events])
         self.assertIn([7], [event["dynamic_ids"] for event in events])
 
+    def test_mixed_cluster_span_cannot_grow_past_72_hours_by_chaining(self):
+        announcement = dynamic(
+            8,
+            "公司签订重大供货合同",
+            "2026-09-23T00:00:00+00:00",
+            kind="announcement",
+        )
+        first_news = dynamic(
+            9, "公司签订重大供货合同", "2026-09-26T00:00:00+00:00"
+        )
+        chained_news = dynamic(
+            10, "公司签订重大供货合同", "2026-09-27T12:00:00+00:00"
+        )
+        first_news["category"] = announcement["category"]
+        chained_news["category"] = announcement["category"]
+
+        events = cluster_dynamic_rows([announcement, first_news, chained_news])
+
+        self.assertEqual(len(events), 2)
+        self.assertIn([8, 9], [event["dynamic_ids"] for event in events])
+        self.assertIn([10], [event["dynamic_ids"] for event in events])
+
     def test_event_shape_and_evidence_are_stable_and_deduplicated(self):
         shared = {
             "evidence_id": "shared",
