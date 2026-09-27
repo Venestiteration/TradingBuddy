@@ -6,7 +6,15 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import settings
 from .database import init_db
-from .routers import assets, chat, importance, public_dynamics, research, theses
+from .routers import (
+    assets,
+    chat,
+    importance,
+    public_dynamics,
+    research,
+    research_brief,
+    theses,
+)
 
 
 def create_app() -> FastAPI:
@@ -30,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(assets.router)
     app.include_router(importance.router)
     app.include_router(public_dynamics.router)
+    app.include_router(research_brief.router)
     app.include_router(theses.router)
     app.include_router(research.router)
     app.include_router(chat.router)
