@@ -43,12 +43,17 @@ def _parse_time(value: str | datetime) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _normalized_title(title: str, *, mask_numbers: bool = False) -> str:
+def _normalized_title(
+    title: str, *, mask_numbers: bool = False, ignore_negations: bool = False
+) -> str:
     normalized = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", title).lower()
     for source, replacement in _SYNONYMS:
         normalized = normalized.replace(source, replacement)
     if mask_numbers:
         normalized = re.sub(r"\d+(?:\.\d+)?", "0", normalized)
+    if ignore_negations:
+        for negation in sorted(_NEGATIONS, key=len, reverse=True):
+            normalized = normalized.replace(negation, "")
     return normalized
 
 
@@ -59,8 +64,12 @@ def _bigrams(value: str) -> set[str]:
 
 
 def _title_similarity(left: str, right: str) -> float:
-    left_pairs = _bigrams(_normalized_title(left, mask_numbers=True))
-    right_pairs = _bigrams(_normalized_title(right, mask_numbers=True))
+    left_pairs = _bigrams(
+        _normalized_title(left, mask_numbers=True, ignore_negations=True)
+    )
+    right_pairs = _bigrams(
+        _normalized_title(right, mask_numbers=True, ignore_negations=True)
+    )
     union = left_pairs | right_pairs
     return len(left_pairs & right_pairs) / len(union) if union else 0.0
 
@@ -109,6 +118,18 @@ def _can_merge(left: dict, right: dict) -> bool:
     return False
 
 
+def _can_join_group(group: list[dict], candidate: dict) -> bool:
+    if not any(_can_merge(member, candidate) for member in group):
+        return False
+    media_members = [
+        member for member in [*group, candidate] if member["kind"] == "news"
+    ]
+    if len(media_members) < 2:
+        return True
+    media_times = [_parse_time(member["published_at"]) for member in media_members]
+    return (max(media_times) - min(media_times)).total_seconds() <= 36 * 3600
+
+
 def _evidence_rank(item: dict) -> tuple[int, int]:
     return (
         1 if item.get("source_level") == "primary" else 0,
@@ -148,10 +169,13 @@ def _source_identity(item: dict) -> str:
 
 
 def _has_conflict(members: list[dict]) -> bool:
-    titles = [member["canonical_title"] for member in members]
-    number_sets = [tuple(re.findall(r"\d+(?:\.\d+)?", title)) for title in titles]
+    claims = [
+        f"{member['canonical_title']} {member.get('summary') or ''}"
+        for member in members
+    ]
+    number_sets = [tuple(re.findall(r"\d+(?:\.\d+)?", claim)) for claim in claims]
     populated_numbers = {numbers for numbers in number_sets if numbers}
-    negated = {any(term in title for term in _NEGATIONS) for title in titles}
+    negated = {any(term in claim for term in _NEGATIONS) for claim in claims}
     return (
         any(member.get("conflict_status") == "possible" for member in members)
         or len(populated_numbers) > 1
@@ -286,7 +310,7 @@ def cluster_dynamic_rows(rows: list[dict], now: datetime | None = None) -> list[
             (
                 existing
                 for existing in groups
-                if any(_can_merge(member, candidate) for member in existing)
+                if _can_join_group(existing, candidate)
             ),
             None,
         )

@@ -65,6 +65,58 @@ class ResearchEventClusteringTest(TestCase):
         ]
         self.assertEqual(len(cluster_dynamic_rows(rows)), 2)
 
+    def test_short_negated_media_claims_merge_and_remain_conflicting(self):
+        rows = [
+            dynamic(1, "公司中标", "2026-09-28T01:00:00+00:00"),
+            dynamic(2, "公司未中标", "2026-09-28T02:00:00+00:00"),
+        ]
+
+        events = cluster_dynamic_rows(rows)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["conflict_status"], "possible")
+        self.assertEqual(
+            {item["title"] for item in events[0]["conflicts"]},
+            {"公司中标", "公司未中标"},
+        )
+
+    def test_conflicting_numbers_in_summaries_are_retained(self):
+        rows = [
+            dynamic(
+                3,
+                "公司签订重大供货合同",
+                "2026-09-28T01:00:00+00:00",
+                summary="合同金额为10亿元",
+            ),
+            dynamic(
+                4,
+                "公司签订重大供货合同",
+                "2026-09-28T02:00:00+00:00",
+                summary="合同金额为12亿元",
+            ),
+        ]
+
+        event = cluster_dynamic_rows(rows)[0]
+
+        self.assertEqual(event["conflict_status"], "possible")
+        self.assertEqual(
+            {item["summary"] for item in event["conflicts"]},
+            {"合同金额为10亿元", "合同金额为12亿元"},
+        )
+
+    def test_media_cluster_span_cannot_grow_past_36_hours_by_chaining(self):
+        rows = [
+            dynamic(5, "公司签订重大供货合同", "2026-09-25T00:00:00+00:00"),
+            dynamic(6, "公司签订重大供货合同", "2026-09-26T11:00:00+00:00"),
+            dynamic(7, "公司签订重大供货合同", "2026-09-27T22:00:00+00:00"),
+        ]
+
+        events = cluster_dynamic_rows(rows)
+
+        self.assertEqual(len(events), 2)
+        self.assertIn([5, 6], [event["dynamic_ids"] for event in events])
+        self.assertIn([7], [event["dynamic_ids"] for event in events])
+
     def test_event_shape_and_evidence_are_stable_and_deduplicated(self):
         shared = {
             "evidence_id": "shared",
