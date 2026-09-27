@@ -143,7 +143,7 @@ def _score_event(evidence: dict) -> int:
                 score += 15
             elif age <= timedelta(days=7):
                 score += 8
-        except ValueError:
+        except (ValueError, TypeError):
             pass
     publisher = str((evidence.get("raw") or {}).get("publisher") or "")
     if any(source in publisher for source in MAJOR_SOURCES):
@@ -188,6 +188,23 @@ def _market_fact_event(code: str, name: str, snapshot: dict, history: dict) -> d
         content_status="full",
         raw={"publisher": "腾讯行情（站内结构化数据）"},
     )
+
+
+def collect_market_event(code: str, name: str, snapshot: dict, history: dict) -> dict:
+    """Build the local market fallback without contacting public-news sources."""
+    item = _market_fact_event(code, name, snapshot, history)
+    events = []
+    if item:
+        save_evidence(item)
+        events.append(
+            {
+                **item,
+                "event_id": item["evidence_id"],
+                "publisher": item["raw"]["publisher"],
+                "priority": _score_event(item),
+            }
+        )
+    return {"events": events, "errors": [], "fetched_at": db.utcnow()}
 
 
 def collect_events(code: str, name: str, snapshot: dict, history: dict, use_cache: bool = True) -> dict:

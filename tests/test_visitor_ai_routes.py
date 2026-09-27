@@ -147,7 +147,7 @@ class VisitorAIRoutesTest(unittest.TestCase):
         self.assertTrue(health["visitor_ai_supported"])
         with patch("app.routers.assets.market_service.snapshot", return_value={"name": "浦发银行"}), \
              patch("app.routers.assets.market_service.history", return_value={"rows": [], "data_time": "2026-09-20"}), \
-             patch("app.routers.assets.collect_events", return_value={"events": [], "errors": [], "fetched_at": db.utcnow()}):
+             patch("app.routers.assets.collect_market_event", return_value={"events": [], "errors": [], "fetched_at": db.utcnow()}):
             overview = self.client.get(f"/api/assets/{self.asset_id}/overview").json()
         self.assertNotIn("messages", overview)
         self.assertNotIn("analyses", overview)

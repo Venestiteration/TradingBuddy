@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .. import database as db
 from ..config import settings
-from ..services.events import collect_events
+from ..services.events import collect_market_event
 from ..services.market import MarketDataError, market_service, normalize_code
 from ..services.public_dynamics import (
     dynamic_evidence,
@@ -172,16 +172,6 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
         errors["history"] = str(exc)
 
     events_payload = {"events": [], "errors": [], "fetched_at": None}
-    if snapshot is not None or history is not None:
-        try:
-            events_payload = collect_events(
-                code, name, snapshot or {}, history or {"rows": []}, use_cache=use_cache
-            )
-        except Exception as exc:
-            errors["events"] = f"事件获取失败: {exc.__class__.__name__}"
-    else:
-        errors["events"] = "行情不可用，事件未抓取"
-
     canonical_events = []
     now = datetime.now(timezone.utc)
     try:
@@ -224,11 +214,14 @@ def build_overview(asset: dict, use_cache: bool = True) -> dict:
             "public_dynamics", f"公开动态读取失败: {exc.__class__.__name__}"
         )
 
-    events = canonical_events or [
-        event
-        for event in events_payload.get("events", [])
-        if event.get("source_type") == "market"
-    ]
+    if not canonical_events:
+        try:
+            events_payload = collect_market_event(
+                code, name, snapshot or {}, history or {"rows": []}
+            )
+        except Exception as exc:
+            errors["events"] = f"行情事实获取失败: {exc.__class__.__name__}"
+    events = canonical_events or events_payload.get("events", [])
 
     thesis = _current_thesis(asset["id"])
 

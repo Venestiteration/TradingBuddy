@@ -1,9 +1,11 @@
 import tempfile
 import threading
+import time
 import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from app import database as db
 from app.services.public_dynamics import (
@@ -83,6 +85,224 @@ class PublicDynamicsSyncTest(unittest.TestCase):
         db.settings.database_path = self.original_db
         db._schema_ready = self.original_ready
         self.tempdir.cleanup()
+
+    def _sync_items(self, items):
+        return sync_public_dynamics(
+            self.asset,
+            force=True,
+            now=self.now,
+            adapters=tuple(
+                FakeAdapter(
+                    provider,
+                    provider_result(
+                        provider,
+                        "success",
+                        [item for item in items if item.provider == provider],
+                    ),
+                )
+                for provider in ("cninfo", "eastmoney_notices", "eastmoney_news")
+            ),
+        )
+
+    def test_same_title_news_do_not_overwrite_on_incremental_reruns(self):
+        early = replace(
+            raw_item("eastmoney_news", "early", "news"),
+            title="公司经营最新情况",
+            published_at="2026-09-20T01:00:00+00:00",
+        )
+        late = replace(
+            raw_item("eastmoney_news", "late", "news"),
+            title=early.title,
+            published_at="2026-09-20T12:00:00+00:00",
+        )
+        self._sync_items([early, late])
+        before = db.query("SELECT id, canonical_key FROM public_dynamics ORDER BY id")
+        self.assertEqual(len(before), 2)
+        self._sync_items([early])
+        self._sync_items([late])
+        self.assertEqual(
+            before,
+            db.query("SELECT id, canonical_key FROM public_dynamics ORDER BY id"),
+        )
+        self.assertEqual(
+            [len(dynamic_evidence(row["id"])) for row in before], [1, 1]
+        )
+
+    def test_cninfo_pdf_wins_over_newer_index_and_replaces_fallback_after_recovery(self):
+        fallback = replace(
+            raw_item("eastmoney_notices", "index"),
+            title="关于收到监管工作函的公告",
+            published_at="2026-09-20T09:00:00+00:00",
+        )
+        official = replace(raw_item("cninfo", "pdf"), title=fallback.title)
+        self._sync_items([fallback])
+        dynamic_id = db.query_one("SELECT id FROM public_dynamics")["id"]
+        self.assertEqual(
+            dynamic_evidence(dynamic_id)[0]["raw"]["provider"],
+            "eastmoney_notices",
+        )
+        self._sync_items([official])
+        self.assertEqual(len(db.query("SELECT id FROM public_dynamics")), 1)
+        evidence = dynamic_evidence(dynamic_id)
+        self.assertEqual(len(evidence), 2)
+        self.assertEqual(evidence[0]["raw"]["provider"], "cninfo")
+        self.assertEqual(evidence[0]["relation"], "primary")
+        self.assertIsNotNone(evidence[0]["raw"]["document_url"])
+        self._sync_items([fallback, official])
+        self.assertEqual(
+            dynamic_evidence(dynamic_id)[0]["raw"]["provider"], "cninfo"
+        )
+        self.assertEqual(
+            sum(e["relation"] == "primary" for e in dynamic_evidence(dynamic_id)),
+            1,
+        )
+
+    def test_metadata_recovery_for_same_evidence_adds_document_url(self):
+        official = raw_item("cninfo", "recover")
+        self._sync_items([replace(official, document_url=None)])
+        dynamic_id = db.query_one("SELECT id FROM public_dynamics")["id"]
+        self._sync_items([official])
+        evidence = dynamic_evidence(dynamic_id)
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["raw"]["document_url"], official.document_url)
+
+    def test_extract_then_sync_then_cache_read_preserves_full_status(self):
+        from app.services.document_text import extract_dynamic_document
+        from tests.test_document_text import FakeClient, FakeResponse, FIXTURES
+
+        official = raw_item("cninfo", "extract")
+        self._sync_items([official])
+        dynamic_id = db.query_one("SELECT id FROM public_dynamics")["id"]
+        client = FakeClient(
+            [
+                FakeResponse(
+                    headers={"content-type": "application/pdf"},
+                    content=(FIXTURES / "searchable.pdf").read_bytes(),
+                )
+            ]
+        )
+        first = extract_dynamic_document(dynamic_id, client=client)
+        self.assertEqual(first["extraction_status"], "extracted")
+        # A source remains title-only after extraction; both rerun and source
+        # omission must retain the extracted audit evidence and canonical state.
+        fallback = replace(raw_item("eastmoney_notices", "index"), title=official.title)
+        for items in ([official], [fallback]):
+            self._sync_items(items)
+            self.assertEqual(get_public_dynamic(dynamic_id)["content_status"], "full")
+            second = extract_dynamic_document(dynamic_id, client=client)
+            self.assertEqual(second, first)
+            self.assertEqual(dynamic_evidence(dynamic_id)[0]["content_status"], "full")
+        self.assertEqual(len(client.requested_urls), 1)
+
+    def test_limited_news_are_persisted_without_advancing_complete_sync(self):
+        complete = sync_public_dynamics(
+            self.asset,
+            force=True,
+            now=self.now,
+            adapters=(
+                FakeAdapter("cninfo", provider_result("cninfo", "empty")),
+                FakeAdapter(
+                    "eastmoney_news", provider_result("eastmoney_news", "empty")
+                ),
+            ),
+        )
+        self.assertEqual(complete["status"], "complete")
+        previous_complete_at = complete["last_complete_at"]
+        later = self.now + timedelta(hours=1)
+        limited = ProviderResult(
+            "eastmoney_news",
+            "failed",
+            (raw_item("eastmoney_news", "limited", "news"),),
+            later.isoformat(),
+            "coverage_limited",
+            "fixed first page",
+        )
+        result = sync_public_dynamics(
+            self.asset,
+            force=True,
+            now=later,
+            adapters=(
+                FakeAdapter("cninfo", provider_result("cninfo", "empty")),
+                FakeAdapter("eastmoney_news", limited),
+            ),
+        )
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["last_complete_at"], previous_complete_at)
+        self.assertEqual(len(db.query("SELECT * FROM public_dynamics")), 1)
+        sync_state = db.query_one(
+            "SELECT * FROM public_dynamics_sync_state WHERE asset_id = ?",
+            (self.asset_id,),
+        )
+        self.assertEqual(sync_state["last_status"], "partial")
+        self.assertEqual(sync_state["last_complete_at"], previous_complete_at)
+        state = db.query_one(
+            "SELECT * FROM source_sync_state WHERE provider = 'eastmoney_news'"
+        )
+        self.assertEqual(
+            state["last_success_at"],
+            provider_result("eastmoney_news", "empty").attempted_at,
+        )
+        self.assertEqual(state["last_error_code"], "coverage_limited")
+
+    def test_blocked_provider_is_bounded_and_late_result_never_persists(self):
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        class BlockingAdapter(FakeAdapter):
+            def fetch(self, *args):
+                self.calls += 1
+                entered.set()
+                release.wait(3)
+                finished.set()
+                return self.result
+
+        blocked = BlockingAdapter(
+            "eastmoney_notices",
+            provider_result(
+                "eastmoney_notices",
+                "success",
+                [raw_item("eastmoney_notices", "late-result")],
+            ),
+        )
+        adapters = (
+            FakeAdapter("cninfo", provider_result("cninfo", "empty")),
+            blocked,
+            FakeAdapter("eastmoney_news", provider_result("eastmoney_news", "empty")),
+        )
+        try:
+            with patch("app.services.public_dynamics.SOURCE_TIMEOUT_SECONDS", 0.05):
+                start = time.monotonic()
+                result = sync_public_dynamics(
+                    self.asset, force=True, now=self.now, adapters=adapters
+                )
+                self.assertLess(time.monotonic() - start, 1)
+                self.assertTrue(entered.is_set())
+                provider = next(
+                    p
+                    for p in result["providers"]
+                    if p["provider"] == "eastmoney_notices"
+                )
+                self.assertEqual(provider["error_code"], "TimeoutError")
+                sync_public_dynamics(
+                    self.asset, force=True, now=self.now, adapters=adapters
+                )
+                self.assertEqual(blocked.calls, 1)
+                self.assertEqual(db.query("SELECT * FROM evidence"), [])
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(1))
+        # Let the worker retire before another test reuses the same provider.
+        from app.services.public_dynamics import (
+            _provider_workers,
+            _provider_workers_lock,
+        )
+
+        with _provider_workers_lock:
+            late_future = _provider_workers.get("eastmoney_notices")
+        if late_future:
+            late_future.result(timeout=1)
+        self.assertEqual(db.query("SELECT * FROM evidence"), [])
 
     def test_decide_sync_obeys_24_hours_and_30_minute_failure_cooldown(self):
         fresh = {

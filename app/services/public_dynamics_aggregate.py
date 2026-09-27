@@ -3,8 +3,12 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .public_dynamics_types import DynamicCluster, RawDynamic
+
+
+BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 
 
 CATEGORY_RULES = (
@@ -35,34 +39,34 @@ def evidence_identity(item: RawDynamic) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+def _business_date(value: str):
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BUSINESS_TZ)
+    return parsed.astimezone(BUSINESS_TZ).date()
+
+
 def _numbers(title: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\d+(?:\.\d+)?", title))
-
-
-def _tokens(title: str) -> set[str]:
-    normalized = normalize_title(title)
-    return {normalized[index : index + 2] for index in range(max(0, len(normalized) - 1))}
 
 
 def _similar(left: RawDynamic, right: RawDynamic) -> bool:
     if left.stock_code != right.stock_code or left.kind != right.kind:
         return False
+    if left.kind == "news":
+        # One configured media provider: its item identity is stable across
+        # overlapping/incremental responses, unlike a moving similarity cluster.
+        return evidence_identity(left) == evidence_identity(right)
     if _numbers(left.title) != _numbers(right.title):
         return False
 
-    left_time = datetime.fromisoformat(left.published_at)
-    right_time = datetime.fromisoformat(right.published_at)
     if left.kind == "announcement":
         return (
-            left_time.date() == right_time.date()
+            _business_date(left.published_at) == _business_date(right.published_at)
             and normalize_title(left.title) == normalize_title(right.title)
         )
 
-    if abs((left_time - right_time).total_seconds()) > 6 * 3600:
-        return False
-    left_tokens, right_tokens = _tokens(left.title), _tokens(right.title)
-    union = left_tokens | right_tokens
-    return bool(union) and len(left_tokens & right_tokens) / len(union) >= 0.82
+    return False
 
 
 def _factor_scores(members: list[RawDynamic]) -> dict[str, float]:
@@ -113,8 +117,10 @@ def aggregate_raw_dynamics(items: list[RawDynamic]) -> list[DynamicCluster]:
         )
         key_seed = (
             f"{lead.stock_code}|{lead.kind}|{normalize_title(lead.title)}|"
-            f"{lead.published_at[:10]}"
+            f"{_business_date(lead.published_at)}"
         )
+        if lead.kind == "news":
+            key_seed = f"{lead.stock_code}|news|{evidence_identity(lead)}"
         clusters.append(
             DynamicCluster(
                 canonical_key=hashlib.sha1(key_seed.encode("utf-8")).hexdigest(),

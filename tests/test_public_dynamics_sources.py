@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.public_dynamics_sources import (
@@ -76,6 +76,7 @@ class FakeAk:
 
     def stock_individual_notice_report(self, **kwargs):
         import pandas as pd
+        self.notice_params = kwargs
         return pd.DataFrame(self.notices)
 
     def stock_news_em(self, **kwargs):
@@ -126,7 +127,59 @@ class PublicDynamicsSourcesTest(unittest.TestCase):
         self.assertEqual(notices.items[0].category, "风险提示")
         self.assertEqual(news.items[0].publisher, "证券时报")
         self.assertEqual(news.items[0].kind, "news")
-        self.assertEqual(news.items[0].published_at, "2026-09-15T07:58:00+00:00")
+        self.assertEqual(news.items[0].published_at, "2026-09-14T23:58:00+00:00")
+        self.assertEqual(notices.items[0].published_at, "2026-09-14T16:00:00+00:00")
+
+    def test_source_queries_use_shanghai_business_date_across_utc_midnight(self):
+        start = datetime(2026, 9, 14, 17, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 15, 1, tzinfo=timezone.utc)
+        client = FakeHttpClient(self.cninfo)
+        CninfoAnnouncementAdapter(client).fetch("600519", start, end, "attempt")
+        self.assertEqual(client.post_calls[0][1]["data"]["seDate"], "2026-09-15~2026-09-15")
+        fake = FakeAk(self.notices, self.news)
+        EastmoneyNoticeAdapter(fake).fetch("600519", start, end, "attempt")
+        self.assertEqual(fake.notice_params["begin_date"], "20260915")
+        self.assertEqual(fake.notice_params["end_date"], "20260915")
+        result = EastmoneyNewsAdapter(fake).fetch("600519", start, end, "attempt")
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].published_at, "2026-09-14T23:58:00+00:00")
+
+    def test_source_queries_span_two_business_dates_at_shanghai_midnight(self):
+        start = datetime(2026, 9, 15, 15, 59, tzinfo=timezone.utc)
+        end = datetime(2026, 9, 15, 16, 1, tzinfo=timezone.utc)
+        client = FakeHttpClient(self.cninfo)
+
+        CninfoAnnouncementAdapter(client).fetch("600519", start, end, "attempt")
+        fake = FakeAk(self.notices, self.news)
+        EastmoneyNoticeAdapter(fake).fetch("600519", start, end, "attempt")
+
+        self.assertEqual(
+            client.post_calls[0][1]["data"]["seDate"],
+            "2026-09-15~2026-09-16",
+        )
+        self.assertEqual(fake.notice_params["begin_date"], "20260915")
+        self.assertEqual(fake.notice_params["end_date"], "20260916")
+
+    def test_busy_day_fixed_page_is_reported_as_limited_not_complete(self):
+        # Simulate a provider with 15 matching rows, while AKShare exposes 10.
+        rows = [
+            dict(self.news[0], 新闻链接=f"https://example.test/news/{i}")
+            for i in range(15)
+        ]
+        fake = FakeAk([], rows[:10])
+        result = EastmoneyNewsAdapter(fake).fetch(
+            "600519", self.start, self.end, "attempt"
+        )
+        self.assertEqual(len(result.items), 10)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error_code, "coverage_limited")
+
+    def test_empty_fixed_page_cannot_certify_90_day_coverage(self):
+        result = EastmoneyNewsAdapter(FakeAk([], [])).fetch(
+            "600519", self.start, self.end, "attempt"
+        )
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error_code, "coverage_limited")
 
     def test_eastmoney_news_error_returns_failed_provider_result(self):
         result = EastmoneyNewsAdapter(FailingAk(self.notices, self.news)).fetch(

@@ -144,7 +144,7 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "公开动态不存在或不属于当前标的")
 
-    @patch("app.routers.assets.collect_events")
+    @patch("app.routers.assets.collect_market_event")
     @patch("app.routers.assets.market_service.history")
     @patch("app.routers.assets.market_service.snapshot")
     @patch("app.routers.assets.sync_public_dynamics")
@@ -173,8 +173,9 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         self.assertEqual(payload["public_sync"], sync.return_value)
         sync.assert_called_once()
         self.assertFalse(sync.call_args.kwargs["force"])
+        collect.assert_not_called()
 
-    @patch("app.routers.assets.collect_events")
+    @patch("app.routers.assets.collect_market_event")
     @patch("app.routers.assets.market_service.history")
     @patch("app.routers.assets.market_service.snapshot")
     @patch("app.routers.assets.sync_public_dynamics")
@@ -192,7 +193,7 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         sync.assert_called_once()
         self.assertTrue(sync.call_args.kwargs["force"])
 
-    @patch("app.routers.assets.collect_events")
+    @patch("app.routers.assets.collect_market_event")
     @patch("app.routers.assets.market_service.history")
     @patch("app.routers.assets.market_service.snapshot")
     @patch("app.routers.assets.sync_public_dynamics", side_effect=RuntimeError("boom"))
@@ -212,6 +213,42 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         self.assertEqual(payload["events"][0]["dynamic_id"], self.dynamic_id)
         self.assertIn("public_dynamics", payload["errors"])
         self.assertIsNone(payload["public_sync"])
+
+    @patch("app.services.events._fetch_news")
+    @patch("app.services.events._fetch_announcements")
+    @patch("app.routers.assets.market_service.history")
+    @patch("app.routers.assets.market_service.snapshot")
+    def test_fresh_public_sync_never_calls_legacy_sources_and_keeps_market_fallback(
+        self, snapshot, history, announcements, news
+    ):
+        now = db.utcnow()
+        db.execute(
+            "INSERT INTO public_dynamics_sync_state "
+            "(asset_id, last_attempt_at, last_complete_at, last_status, updated_at) "
+            "VALUES (?, ?, ?, 'complete', ?)",
+            (self.asset_id, now, now, now),
+        )
+        snapshot.return_value = {
+            "name": "浦发银行",
+            "price": 10,
+            "change_pct": 3,
+            "price_time": now,
+        }
+        history.return_value = {"rows": [], "data_time": now}
+        for has_canonical in (True, False):
+            if not has_canonical:
+                db.execute("DELETE FROM public_dynamics WHERE asset_id = ?", (self.asset_id,))
+            response = self.client.get(f"/api/assets/{self.asset_id}/overview")
+            self.assertEqual(response.status_code, 200)
+            body = response.json()
+            self.assertEqual(body["public_sync"]["decision"], "fresh")
+            self.assertEqual(len(body["events"]), 1)
+            self.assertEqual(
+                body["events"][0]["source_type"],
+                "announcement" if has_canonical else "market",
+            )
+        announcements.assert_not_called()
+        news.assert_not_called()
 
 
 if __name__ == "__main__":

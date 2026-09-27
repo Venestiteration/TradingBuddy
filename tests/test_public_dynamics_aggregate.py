@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from app.services.public_dynamics_aggregate import (
     aggregate_raw_dynamics,
@@ -27,6 +28,64 @@ def item(provider, item_id, title, published, kind="announcement", excerpt=""):
 
 
 class PublicDynamicsAggregateTest(unittest.TestCase):
+    def test_same_title_news_eleven_hours_apart_have_distinct_stable_keys(self):
+        early = item(
+            "eastmoney_news",
+            "early",
+            "公司经营最新情况",
+            "2026-09-15T01:00:00+00:00",
+            "news",
+        )
+        late = replace(
+            early,
+            provider_item_id="late",
+            source_url="https://example.test/late",
+            published_at="2026-09-15T12:00:00+00:00",
+        )
+        clusters = aggregate_raw_dynamics([early, late])
+        self.assertEqual(len({cluster.canonical_key for cluster in clusters}), 2)
+        for row in (early, late):
+            self.assertIn(
+                aggregate_raw_dynamics([row])[0].canonical_key,
+                {cluster.canonical_key for cluster in clusters},
+            )
+
+    def test_official_key_matches_business_date_across_providers_and_utc_days(self):
+        early = item(
+            "eastmoney_notices",
+            "index",
+            "关于收到监管工作函的公告",
+            "2026-09-14T16:00:00+00:00",
+        )
+        late = item("cninfo", "pdf", early.title, "2026-09-15T08:00:00+00:00")
+        self.assertEqual(len(aggregate_raw_dynamics([early, late])), 1)
+        self.assertEqual(
+            aggregate_raw_dynamics([early])[0].canonical_key,
+            aggregate_raw_dynamics([late])[0].canonical_key,
+        )
+
+    def test_naive_announcement_time_is_shanghai_local_for_canonical_date(self):
+        local = item(
+            "eastmoney_notices",
+            "index",
+            "关于收到监管工作函的公告",
+            "2026-09-15T23:30:00",
+        )
+        utc = item(
+            "cninfo",
+            "pdf",
+            local.title,
+            "2026-09-15T15:30:00+00:00",
+        )
+
+        clusters = aggregate_raw_dynamics([local, utc])
+
+        self.assertEqual(len(clusters), 1)
+        self.assertEqual(
+            aggregate_raw_dynamics([local])[0].canonical_key,
+            aggregate_raw_dynamics([utc])[0].canonical_key,
+        )
+
     def test_normalize_title_removes_punctuation_and_case(self):
         self.assertEqual(normalize_title("关于 监管-函：ABC 12！"), "关于监管函abc12")
 

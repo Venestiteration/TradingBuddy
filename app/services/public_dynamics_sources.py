@@ -35,10 +35,13 @@ def _iso(value) -> str:
     else:
         parsed = datetime.fromisoformat(_string(value).replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    else:
-        parsed = parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=CNINFO_BUSINESS_TZ)
+    parsed = parsed.astimezone(timezone.utc)
     return parsed.isoformat(timespec="seconds")
+
+
+def _business_time(value: datetime) -> datetime:
+    return datetime.fromisoformat(_iso(value)).astimezone(CNINFO_BUSINESS_TZ)
 
 
 def _failed(provider: str, attempted_at: str, exc: Exception) -> ProviderResult:
@@ -86,7 +89,7 @@ class CninfoAnnouncementAdapter:
                         "column": exchange,
                         "tabName": "fulltext",
                         "stock": f"{stock_code},{org_id}",
-                        "seDate": f"{start:%Y-%m-%d}~{end:%Y-%m-%d}",
+                        "seDate": f"{_business_time(start):%Y-%m-%d}~{_business_time(end):%Y-%m-%d}",
                         "isHLtitle": "true",
                     },
                     headers={"Referer": "https://www.cninfo.com.cn/"},
@@ -155,8 +158,8 @@ class EastmoneyNoticeAdapter:
             frame = self.ak.stock_individual_notice_report(
                 security=stock_code,
                 symbol="全部",
-                begin_date=start.strftime("%Y%m%d"),
-                end_date=end.strftime("%Y%m%d"),
+                begin_date=_business_time(start).strftime("%Y%m%d"),
+                end_date=_business_time(end).strftime("%Y%m%d"),
             )
             items = tuple(
                 RawDynamic(
@@ -223,9 +226,13 @@ class EastmoneyNewsAdapter:
             result_items = tuple(items)
             return ProviderResult(
                 self.provider,
-                "success" if result_items else "empty",
+                # AKShare exposes only a fixed first page, with no coverage or
+                # exhaustion marker. Even an empty page cannot certify a window.
+                "failed",
                 result_items,
                 attempted_at,
+                error_code="coverage_limited",
+                error_message="新闻接口仅提供固定首页，无法确认请求时间窗口的完整覆盖；已保留本页新闻。",
             )
         except Exception as exc:
             return _failed(self.provider, attempted_at, exc)

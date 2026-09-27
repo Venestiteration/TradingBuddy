@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, wait
 from datetime import datetime, timedelta, timezone
+from threading import Lock, Thread
 
 import httpx
 
@@ -23,6 +24,13 @@ from .public_dynamics_types import (
     RawDynamic,
     SyncDecision,
 )
+
+# A total wall-clock budget also bounds AKShare calls that lack socket timeouts.
+# Uncooperative calls are quarantined: only one daemon worker per provider may
+# remain in flight. Late results have no database access and are never persisted.
+SOURCE_TIMEOUT_SECONDS = 20.0
+_provider_workers: dict[str, Future] = {}
+_provider_workers_lock = Lock()
 
 
 def decide_sync(state: dict | None, force: bool, now: datetime) -> SyncDecision:
@@ -64,7 +72,7 @@ def _channel_status(results: list[ProviderResult]) -> str:
     media_ok = MEDIA_PROVIDERS.issubset(successful)
     if official_ok and media_ok:
         return "complete"
-    if successful:
+    if successful or any(result.items for result in results):
         return "partial"
     return "failed"
 
@@ -122,8 +130,39 @@ def _fetch_results(
         except Exception as exc:
             return _failed_provider_result(adapter.provider, attempted_at, exc)
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        return list(executor.map(fetch, adapters))
+    pending = {}
+
+    def run(adapter, future):
+        result = fetch(adapter)
+        with _provider_workers_lock:
+            if _provider_workers.get(adapter.provider) is future:
+                del _provider_workers[adapter.provider]
+            future.set_result(result)
+
+    for adapter in adapters:
+        with _provider_workers_lock:
+            if adapter.provider in _provider_workers:
+                future = Future()
+                future.set_result(
+                    _failed_provider_result(
+                        adapter.provider,
+                        attempted_at,
+                        TimeoutError("前次来源请求尚未结束，本次未重复启动"),
+                    )
+                )
+            else:
+                future = Future()
+                _provider_workers[adapter.provider] = future
+                Thread(target=run, args=(adapter, future), daemon=True).start()
+            pending[adapter.provider] = future
+    if pending:
+        wait(pending.values(), timeout=SOURCE_TIMEOUT_SECONDS)
+    return [
+        future.result() if future.done() else _failed_provider_result(
+            provider, attempted_at, TimeoutError("来源请求超过同步等待时限")
+        )
+        for provider, future in pending.items()
+    ]
 
 
 def _save_evidence(conn, item: RawDynamic) -> dict:
@@ -144,11 +183,29 @@ def _save_evidence(conn, item: RawDynamic) -> dict:
             "raw_metadata": item.raw_metadata,
         },
     )
+    existing = conn.execute(
+        "SELECT * FROM evidence WHERE evidence_id = ?", (evidence["evidence_id"],)
+    ).fetchone()
+    if existing:
+        ranks = {"title_only": 0, "excerpt": 1, "full": 2}
+        if ranks[existing["content_status"]] >= ranks[evidence["content_status"]]:
+            evidence["content_status"] = existing["content_status"]
+            evidence["excerpt"] = existing["excerpt"]
+        old_raw = json.loads(existing["raw"] or "{}")
+        evidence["raw"] = {
+            **old_raw,
+            **{
+                key: value
+                for key, value in evidence["raw"].items()
+                if value is not None
+            },
+        }
     conn.execute(
         "INSERT INTO evidence (evidence_id, stock_code, source_type, source_level, "
         "title, excerpt, published_at, source_url, fetched_at, content_status, raw) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(evidence_id) DO UPDATE SET fetched_at = excluded.fetched_at",
+        "ON CONFLICT(evidence_id) DO UPDATE SET fetched_at = excluded.fetched_at, "
+        "excerpt = excluded.excerpt, content_status = excluded.content_status, raw = excluded.raw",
         (
             evidence["evidence_id"],
             evidence["stock_code"],
@@ -205,12 +262,17 @@ def _upsert_cluster(conn, asset_id: int, cluster, evidence_by_item, updated_at: 
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(asset_id, canonical_key) DO UPDATE SET "
         "kind = excluded.kind, category = excluded.category, "
-        "canonical_title = excluded.canonical_title, summary = excluded.summary, "
-        "published_at = excluded.published_at, "
+        "canonical_title = excluded.canonical_title, "
+        "summary = CASE WHEN length(excluded.summary) > length(public_dynamics.summary) "
+        "THEN excluded.summary ELSE public_dynamics.summary END, "
+        "published_at = CASE WHEN datetime(excluded.published_at) > datetime(public_dynamics.published_at) "
+        "THEN excluded.published_at ELSE public_dynamics.published_at END, "
         "importance_score = excluded.importance_score, "
         "importance_factors_json = excluded.importance_factors_json, "
         "formula_version = excluded.formula_version, "
-        "content_status = excluded.content_status, "
+        "content_status = CASE WHEN public_dynamics.content_status = 'full' THEN 'full' "
+        "WHEN public_dynamics.content_status = 'excerpt' AND excluded.content_status = 'title_only' "
+        "THEN 'excerpt' ELSE excluded.content_status END, "
         "conflict_status = excluded.conflict_status, updated_at = excluded.updated_at",
         (
             asset_id,
@@ -233,30 +295,57 @@ def _upsert_cluster(conn, asset_id: int, cluster, evidence_by_item, updated_at: 
         "SELECT id FROM public_dynamics WHERE asset_id = ? AND canonical_key = ?",
         (asset_id, cluster.canonical_key),
     ).fetchone()["id"]
-    existing_primary = conn.execute(
-        "SELECT evidence_id FROM public_dynamic_evidence "
-        "WHERE dynamic_id = ? AND relation = 'primary' LIMIT 1",
-        (dynamic_id,),
-    ).fetchone()
-    primary_evidence_id = existing_primary["evidence_id"] if existing_primary else None
-    if primary_evidence_id is None:
-        primary_member = next(
-            (member for member in cluster.members if member.source_level == "primary"),
-            None,
-        )
-        if primary_member is not None:
-            primary_evidence_id = evidence_by_item[id(primary_member)]["evidence_id"]
-
     for member in cluster.members:
         evidence_id = evidence_by_item[id(member)]["evidence_id"]
-        relation = "primary" if evidence_id == primary_evidence_id else "corroborating"
         conn.execute(
             "INSERT INTO public_dynamic_evidence "
-            "(dynamic_id, evidence_id, relation, created_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(dynamic_id, evidence_id) DO UPDATE SET "
-            "relation = excluded.relation",
-            (dynamic_id, evidence_id, relation, updated_at),
+            "(dynamic_id, evidence_id, relation, created_at) VALUES (?, ?, 'corroborating', ?) "
+            "ON CONFLICT(dynamic_id, evidence_id) DO NOTHING",
+            (dynamic_id, evidence_id, updated_at),
         )
+
+    linked = conn.execute(
+        "SELECT e.*, de.relation FROM public_dynamic_evidence de "
+        "JOIN evidence e ON e.evidence_id = de.evidence_id WHERE de.dynamic_id = ?",
+        (dynamic_id,),
+    ).fetchall()
+
+    def primary_rank(evidence):
+        from .document_text import DocumentRejected, validate_url
+
+        raw = json.loads(evidence["raw"] or "{}")
+        try:
+            valid_document = bool(validate_url(raw.get("document_url") or ""))
+        except DocumentRejected:
+            valid_document = False
+        return (
+            valid_document,
+            raw.get("provider") == "cninfo",
+            evidence["content_status"] == "full",
+            evidence["source_level"] == "primary",
+            evidence["relation"] == "primary",
+            evidence["evidence_id"],
+        )
+
+    primary = max(linked, key=primary_rank)
+    conn.execute(
+        "UPDATE public_dynamic_evidence SET relation = CASE WHEN evidence_id = ? "
+        "THEN 'primary' ELSE 'corroborating' END WHERE dynamic_id = ?",
+        (primary["evidence_id"], dynamic_id),
+    )
+    ranks = {"title_only": 0, "excerpt": 1, "full": 2}
+    best_status = max(
+        [cluster.content_status, *[item["content_status"] for item in linked]],
+        key=ranks.get,
+    )
+    # Linked evidence may already contain extracted text, including from a
+    # provider absent in this run. Refresh the canonical completeness from it.
+    conn.execute(
+        "UPDATE public_dynamics SET content_status = CASE WHEN content_status = 'full' "
+        "THEN 'full' WHEN ? = 'full' THEN 'full' WHEN content_status = 'excerpt' "
+        "THEN 'excerpt' ELSE ? END WHERE id = ?",
+        (best_status, best_status, dynamic_id),
+    )
 
 
 def sync_public_dynamics(
@@ -295,7 +384,6 @@ def sync_public_dynamics(
     successful_items = [
         item
         for result in results
-        if result.status in {"success", "empty"}
         for item in result.items
     ]
     updated_at = attempted_at
