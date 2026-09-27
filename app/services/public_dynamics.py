@@ -36,19 +36,16 @@ _provider_workers_lock = Lock()
 def decide_sync(state: dict | None, force: bool, now: datetime) -> SyncDecision:
     if force:
         return SyncDecision(True, "manual")
+    if state and state.get("last_status") in {"partial", "failed"}:
+        attempted = datetime.fromisoformat(state["last_attempt_at"])
+        if now.astimezone(attempted.tzinfo) - attempted < timedelta(minutes=30):
+            return SyncDecision(False, "failure_cooldown")
+        return SyncDecision(True, "retry_after_failure")
     if not state or not state.get("last_complete_at"):
-        if state and state.get("last_status") in {"partial", "failed"}:
-            attempted = datetime.fromisoformat(state["last_attempt_at"])
-            if now.astimezone(attempted.tzinfo) - attempted < timedelta(minutes=30):
-                return SyncDecision(False, "failure_cooldown")
         return SyncDecision(True, "never_complete")
     completed = datetime.fromisoformat(state["last_complete_at"])
     if now.astimezone(completed.tzinfo) - completed <= timedelta(hours=24):
         return SyncDecision(False, "fresh")
-    if state.get("last_status") in {"partial", "failed"}:
-        attempted = datetime.fromisoformat(state["last_attempt_at"])
-        if now.astimezone(attempted.tzinfo) - attempted < timedelta(minutes=30):
-            return SyncDecision(False, "failure_cooldown")
     return SyncDecision(True, "stale")
 
 

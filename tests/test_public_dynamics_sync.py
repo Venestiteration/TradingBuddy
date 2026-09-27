@@ -326,6 +326,81 @@ class PublicDynamicsSyncTest(unittest.TestCase):
         partial = {**failed, "last_status": "partial"}
         self.assertFalse(decide_sync(partial, False, self.now).should_sync)
 
+    def _assert_previous_complete_retries_after_failure_cooldown(
+        self, expected_status
+    ):
+        complete = sync_public_dynamics(
+            self.asset,
+            force=True,
+            now=self.now,
+            adapters=(
+                FakeAdapter("cninfo", provider_result("cninfo", "empty")),
+                FakeAdapter(
+                    "eastmoney_news", provider_result("eastmoney_news", "empty")
+                ),
+            ),
+        )
+        previous_complete_at = complete["last_complete_at"]
+        failed_at = self.now + timedelta(hours=1)
+
+        def retry_adapters():
+            return (
+                FakeAdapter(
+                    "cninfo",
+                    provider_result(
+                        "cninfo", "empty" if expected_status == "partial" else "failed"
+                    ),
+                ),
+                FakeAdapter(
+                    "eastmoney_news", provider_result("eastmoney_news", "failed")
+                ),
+            )
+
+        failure = sync_public_dynamics(
+            self.asset,
+            force=True,
+            now=failed_at,
+            adapters=retry_adapters(),
+        )
+        self.assertEqual(failure["status"], expected_status)
+        self.assertEqual(failure["last_complete_at"], previous_complete_at)
+
+        cooldown_adapters = retry_adapters()
+        cooldown = sync_public_dynamics(
+            self.asset,
+            now=failed_at + timedelta(minutes=29),
+            adapters=cooldown_adapters,
+        )
+        self.assertFalse(cooldown["synced"])
+        self.assertEqual(cooldown["decision"], "failure_cooldown")
+        self.assertEqual(
+            [adapter.calls for adapter in cooldown_adapters], [0, 0]
+        )
+
+        retry_adapters_after_cooldown = retry_adapters()
+        retry = sync_public_dynamics(
+            self.asset,
+            now=failed_at + timedelta(minutes=31),
+            adapters=retry_adapters_after_cooldown,
+        )
+        self.assertTrue(retry["synced"])
+        self.assertEqual(retry["decision"], "retry_after_failure")
+        self.assertEqual(
+            [adapter.calls for adapter in retry_adapters_after_cooldown], [1, 1]
+        )
+        self.assertEqual(retry["last_complete_at"], previous_complete_at)
+        state = db.query_one(
+            "SELECT * FROM public_dynamics_sync_state WHERE asset_id = ?",
+            (self.asset_id,),
+        )
+        self.assertEqual(state["last_complete_at"], previous_complete_at)
+
+    def test_partial_after_complete_retries_after_failure_cooldown(self):
+        self._assert_previous_complete_retries_after_failure_cooldown("partial")
+
+    def test_failed_after_complete_retries_after_failure_cooldown(self):
+        self._assert_previous_complete_retries_after_failure_cooldown("failed")
+
     def test_one_official_provider_and_media_make_complete_status(self):
         adapters = (
             FakeAdapter(
