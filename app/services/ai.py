@@ -115,33 +115,53 @@ IMPACT_LABELS = {
     "insufficient": "信息不足",
 }
 
+_TRADING_ACTION = (
+    r"(?:持有|回避|规避|暂避|买入|卖出|观望|配置|布局|"
+    r"建仓|加仓|减仓|清仓|减持|参与)"
+)
 _TRADING_DIRECTIVE_PATTERN = re.compile(
-    r"(?:建议|应当|应该|应|必须|可以|可|继续|耐心|坚定|安心|适合|推荐|"
-    r"择机|逢低|逢高|分批|及时|立即|暂时|保持)"
-    r"[^。！？；，]{0,6}"
-    r"(?:持有|回避|规避|暂避|买入|卖出|观望|配置|布局|建仓|加仓|减仓|清仓|减持)"
+    r"(?:请|不要|不应|不宜|勿|切勿|务必|建议|应当|应该|应|必须|"
+    r"可以|可|继续|耐心|坚定|安心|适合|推荐|择机|逢低|逢高|"
+    r"分批|及时|立即|暂时|暂不|保持)"
+    rf"[^。！？；，,:：;]{{0,10}}{_TRADING_ACTION}"
 )
 _POSITION_DIRECTIVE_PATTERN = re.compile(
     r"(?:"
-    r"(?:建议|应当|应该|应|必须|可以|可|"
+    r"(?:建议|应当|应该|应|必须|可以|可|请|"
     r"控制|调整|维持|保持|降低|提高|增加|减少)"
-    r"[^。！？；，]{0,3}(?:仓位|持仓|半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
-    r"|(?:仓位|持仓)[^。！？；，]{0,4}"
-    r"(?:降至|减至|调至|设为|控制在|维持在|提高至|降低至|加至)"
-    r"[^。！？；，]{0,3}(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
+    r"[^。！？；，,:：;]{0,3}(?:仓位|持仓|半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
+    r"|(?:仓位|持仓)[^。！？；，,:：;]{0,4}"
+    r"(?:不超过|不高于|不低于|至多|至少|降至|减至|调至|设为|"
+    r"控制在|维持在|提高至|降低至|加至)"
+    r"[^。！？；，,:：;]{0,3}(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十百分之]+成?)"
     r"|(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
-    r"[^。！？；，]{0,3}(?:持有|观望|操作|参与)"
+    r"[^。！？；，,:：;]{0,3}(?:持有|观望|操作|参与)"
     r")"
 )
-_EQUITY_AVOIDANCE_PATTERN = re.compile(
-    r"(?:回避|规避)(?:该股|本股|此股|股票|个股|该标的|本标的)"
+_USER_FACING_TRADING_PATTERN = re.compile(
+    rf"(?:你|您|投资者|用户|持有人|股民|交易者|我们)"
+    rf"[^。！？；，,:：;]{{0,12}}{_TRADING_ACTION}"
+    rf"|{_TRADING_ACTION}[^。！？；，,:：;]{{0,5}}"
+    r"(?:该股|本股|此股|股票|个股|该标的|本标的|标的|仓位|持仓)"
+    r"|(?:该股|本股|此股|股票|个股|该标的|本标的|标的)"
+    rf"[^。！？；，,:：;]{{0,8}}{_TRADING_ACTION}"
+)
+_DIRECT_TRADING_PHRASE_PATTERN = re.compile(
+    r"(?:持有为宜|暂不参与|不要持有)"
+)
+_FACTUAL_SUBJECT_PATTERN = re.compile(
+    r"(?:公司|企业|基金|监管(?:部门|机构)?|法规|规则)"
+    r"[^。！？；，,:：;]{0,12}$"
 )
 _EXPLICIT_TRADING_PATTERN = re.compile(
     r"(?:止损|止盈|目标价|抄底|逃顶|低吸|高抛|"
-    r"(?:^|[：:,，。；;\s])(?:买入|卖出|加仓|减仓|清仓|建仓)|"
-    r"(?:买入|卖出|加仓|减仓|清仓|建仓)\s*$|"
+    r"^(?:买入|卖出|加仓|减仓|清仓|建仓)\s*$|"
     r"\b(?:buy|sell|hold)\b)",
     re.IGNORECASE,
+)
+_TRADING_CLAUSE_SPLIT_PATTERN = re.compile(r"[。！？；，,:：;\n]+")
+_LEADING_CONNECTOR_PATTERN = re.compile(
+    r"^(?:但|而|因此|所以|同时|不过|则|并且|并|且)\s*"
 )
 
 _SNAPSHOT_NUMERIC_FIELDS = {
@@ -479,15 +499,28 @@ def _result_strings(value: Any) -> Generator[str, None, None]:
 
 
 def _contains_trading_instruction(text: str) -> bool:
-    return any(
-        pattern.search(text)
-        for pattern in (
-            _TRADING_DIRECTIVE_PATTERN,
-            _POSITION_DIRECTIVE_PATTERN,
-            _EQUITY_AVOIDANCE_PATTERN,
-            _EXPLICIT_TRADING_PATTERN,
-        )
-    )
+    for raw_clause in _TRADING_CLAUSE_SPLIT_PATTERN.split(text):
+        clause = raw_clause.strip()
+        if not clause:
+            continue
+        clause = _LEADING_CONNECTOR_PATTERN.sub("", clause)
+        if any(
+            pattern.search(clause)
+            for pattern in (
+                _POSITION_DIRECTIVE_PATTERN,
+                _USER_FACING_TRADING_PATTERN,
+                _DIRECT_TRADING_PHRASE_PATTERN,
+                _EXPLICIT_TRADING_PATTERN,
+            )
+        ):
+            return True
+        for match in _TRADING_DIRECTIVE_PATTERN.finditer(clause):
+            # Company/fund/regulator obligations are explanatory facts unless
+            # the same clause contains a user, security, or position cue.
+            if _FACTUAL_SUBJECT_PATTERN.search(clause[:match.start()]):
+                continue
+            return True
+    return False
 
 
 def validate_research_result(

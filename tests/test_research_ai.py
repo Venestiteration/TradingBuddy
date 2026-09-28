@@ -353,6 +353,23 @@ class ResearchAIValidationTest(unittest.TestCase):
                     "none",
                 )
 
+    def test_direct_prefix_position_limit_and_nonparticipation_are_rejected(self):
+        instructions = (
+            "请持有",
+            "不要持有",
+            "持有为宜",
+            "仓位不超过三成",
+            "暂不参与",
+        )
+
+        for instruction in instructions:
+            with self.subTest(instruction=instruction), self.assertRaises(AIError):
+                validate_research_result(
+                    valid_result(core_conclusion=instruction),
+                    {"e1": sample_evidence()},
+                    "none",
+                )
+
     def test_ordinary_explanatory_holding_language_is_not_rejected(self):
         result = valid_result(
             core_conclusion="公司持有子公司股权，目前仅能确认这一披露事实。"
@@ -363,6 +380,21 @@ class ResearchAIValidationTest(unittest.TestCase):
         )
 
         self.assertEqual(cleaned["core_conclusion"], result["core_conclusion"])
+
+    def test_factual_subject_holding_language_is_not_rejected(self):
+        factual_statements = (
+            "公司可以持有子公司股权。",
+            "基金必须持有百分之五的现金。",
+            "监管建议银行持有充足资本。",
+        )
+
+        for statement in factual_statements:
+            with self.subTest(statement=statement):
+                result = valid_result(core_conclusion=statement)
+                cleaned, _ = validate_research_result(
+                    result, {"e1": sample_evidence()}, "none"
+                )
+                self.assertEqual(cleaned["core_conclusion"], statement)
 
     def test_position_and_waiting_terms_without_directive_context_are_not_rejected(self):
         result = valid_result(
