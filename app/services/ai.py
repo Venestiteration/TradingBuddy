@@ -117,12 +117,13 @@ IMPACT_LABELS = {
 
 TRADING_PATTERN = re.compile(
     r"(应该?买|应该?卖|建议买|建议卖|可以买|可以卖|买入|卖出|加仓|减仓|清仓|建仓|"
-    r"止损|止盈|目标价|抄底|逃顶|满仓|建议持有|继续持有|耐心持有|坚定持有|"
+    r"止损|止盈|目标价|抄底|逃顶|满仓|建议持有|应当持有|可以持有|半仓持有|"
+    r"继续持有|耐心持有|坚定持有|"
     r"适合持有|推荐持有|控制仓位|调整仓位|保持仓位|降低仓位|提高仓位|"
     r"维持仓位|仓位控制|逢低(?:配置|布局|买入|加仓)|逢高(?:卖出|减仓|减持)|"
     r"分批(?:买入|卖出|建仓|配置)|"
     r"择机(?:买入|卖出|配置)|建议配置|可以配置|低吸|高抛|建议观望|继续观望|"
-    r"建议暂避|\b(?:buy|sell|hold)\b)",
+    r"保持观望|建议暂避|暂时规避|\b(?:buy|sell|hold)\b)",
     re.IGNORECASE,
 )
 
@@ -145,6 +146,7 @@ _TITLE_ONLY_SAFE_PHRASES = (
     "正文未提供", "正文缺失", "无法核验", "尚待核验", "待核验",
     "原因无法核验", "影响无法核验", "结果无法核验", "细节无法核验",
     "证据不足", "已确认判断", "等待后续公告", "后续公告",
+    "是否要继续核验", "是否继续核验", "继续核验",
     "后续披露", "补充公告", "尚不清楚", "不清楚", "未披露", "未知",
     "仅有标题", "仅标题", "标题", "正文", "信息", "证据", "相关事实",
 )
@@ -536,6 +538,7 @@ def validate_research_result(
     if all_evidence_is_title_only:
         global_title_fields = (
             "core_conclusion", "key_tension", "thesis_relationship",
+            "follow_up_question",
         )
         for field in global_title_fields:
             _assert_title_only_supported(cleaned[field], all_titles, field)

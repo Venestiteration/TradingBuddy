@@ -77,6 +77,7 @@ def title_only_result(**overrides):
         unknowns=["正文未提供，原因无法核验。"],
         watch_signals=["等待后续公告。"],
         thesis_relationship="证据不足，无法核验已确认判断。",
+        follow_up_question="是否要继续核验公司签署合同？",
     )
     result.update(overrides)
     return result
@@ -159,6 +160,9 @@ class ResearchAIValidationTest(unittest.TestCase):
             "unknowns": {"unknowns": ["客户需求是否持续增长尚不清楚。"]},
             "watch_signals": {"watch_signals": ["客户需求增长。"]},
             "thesis_relationship": {"thesis_relationship": "需求增长已验证原判断。"},
+            "follow_up_question": {
+                "follow_up_question": "是否要核验需求增长原因？"
+            },
         }
 
         for label, override in cases.items():
@@ -313,6 +317,9 @@ class ResearchAIValidationTest(unittest.TestCase):
     def test_common_hold_position_and_allocation_instructions_are_rejected(self):
         instructions = (
             "建议持有",
+            "应当持有",
+            "可以持有",
+            "半仓持有",
             "可继续持有",
             "耐心持有",
             "坚定持有",
@@ -325,7 +332,9 @@ class ResearchAIValidationTest(unittest.TestCase):
             "分批建仓",
             "分批配置",
             "建议观望",
+            "保持观望",
             "建议暂避",
+            "暂时规避",
         )
 
         for instruction in instructions:
@@ -335,6 +344,17 @@ class ResearchAIValidationTest(unittest.TestCase):
                     {"e1": sample_evidence()},
                     "none",
                 )
+
+    def test_ordinary_explanatory_holding_language_is_not_rejected(self):
+        result = valid_result(
+            core_conclusion="公司持有子公司股权，目前仅能确认这一披露事实。"
+        )
+
+        cleaned, _ = validate_research_result(
+            result, {"e1": sample_evidence()}, "none"
+        )
+
+        self.assertEqual(cleaned["core_conclusion"], result["core_conclusion"])
 
     def test_runtime_validation_rejects_extra_model_fields(self):
         result = valid_result(conclusion="旧字段不应由模型返回")

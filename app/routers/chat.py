@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from .. import database as db
 from ..services.ai import run_grounded_stream
 from ..services.evidence import get_evidence, public_evidence
-from ..services.public_dynamics import dynamic_evidence
+from ..services.public_dynamics import get_public_dynamic
 from ..services.visitor_ai import VisitorAIConfig, visitor_ai_config
 from .assets import _asset_row, _current_thesis
 from .research import _sse_response
@@ -54,11 +54,27 @@ def chat_stream(
     # 证据范围：选中事件的证据 + 该标的最近 48 小时内的本地证据（失败降级时仍可追问）
     evidence_items = []
     selected_event = None
+    conflict_status = "none"
     if payload.dynamic_id is not None:
-        evidence_items = dynamic_evidence(payload.dynamic_id, asset_id=asset["id"])
-        if not evidence_items:
+        dynamic = get_public_dynamic(payload.dynamic_id)
+        if (
+            not dynamic
+            or dynamic["asset_id"] != asset["id"]
+            or not dynamic["evidence"]
+        ):
             raise HTTPException(status_code=404, detail="公开动态不存在或不属于当前标的")
-        selected_event = evidence_items[0]
+        evidence_items = dynamic["evidence"]
+        lead = evidence_items[0]
+        conflict_status = dynamic["conflict_status"]
+        selected_event = {
+            "event_id": lead["evidence_id"],
+            "title": dynamic["canonical_title"],
+            "summary": dynamic.get("summary"),
+            "published_at": dynamic["published_at"],
+            "source_type": lead["source_type"],
+            "category": dynamic.get("category"),
+            "conflict_status": conflict_status,
+        }
     elif payload.event_id:
         selected = get_evidence(payload.event_id)
         if selected and selected["stock_code"] == asset["stock_code"]:
@@ -95,5 +111,6 @@ def chat_stream(
         thesis=thesis,
         recent_messages=[item.model_dump() for item in payload.recent_messages],
         snapshot=snapshot,
+        conflict_status=conflict_status,
     )
     return _sse_response(generator)

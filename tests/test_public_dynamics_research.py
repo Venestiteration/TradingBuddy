@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,25 @@ from app.services.visitor_ai import VisitorAIConfig, visitor_ai_config
 
 def completed_stream(**kwargs):
     yield "event: completed\ndata: {}\n\n"
+
+
+def valid_ai_result(evidence_id):
+    return {
+        "answer_mode": "event",
+        "core_conclusion": "事件需继续核验。",
+        "key_tension": "来源信息存在差异。",
+        "impact_state": "watch",
+        "sections": [],
+        "facts": [{"claim": "测试公告", "evidence_ids": [evidence_id]}],
+        "impact_paths": [],
+        "inferences": [],
+        "unknowns": [],
+        "watch_signals": ["后续公告"],
+        "thesis_relationship": "尚未确认影响。",
+        "follow_up_question": "是否继续核验？",
+        "confidence": "high",
+        "safety_boundary": "以上为研究信息整理，不构成投资建议。",
+    }
 
 
 class PublicDynamicsResearchTest(unittest.TestCase):
@@ -98,10 +118,16 @@ class PublicDynamicsResearchTest(unittest.TestCase):
             {item["evidence_id"] for item in run.call_args.kwargs["evidence_items"]},
             {self.primary_evidence_id, self.secondary_evidence_id},
         )
+        self.assertEqual(run.call_args.kwargs["conflict_status"], "none")
+        self.assertEqual(run.call_args.kwargs["event"]["conflict_status"], "none")
         self.assertEqual(db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"], 0)
 
     @patch("app.routers.chat.run_grounded_stream", side_effect=completed_stream)
     def test_chat_dynamic_loads_every_linked_evidence_without_persistence(self, run):
+        db.execute(
+            "UPDATE public_dynamics SET conflict_status = 'possible' WHERE id = ?",
+            (self.dynamic_id,),
+        )
         response = self.client.post(
             "/api/chat/stream",
             json={
@@ -121,7 +147,42 @@ class PublicDynamicsResearchTest(unittest.TestCase):
                 {item["evidence_id"] for item in run.call_args.kwargs["evidence_items"]}
             )
         )
+        self.assertEqual(run.call_args.kwargs["conflict_status"], "possible")
+        self.assertEqual(run.call_args.kwargs["event"]["conflict_status"], "possible")
         self.assertEqual(db.query_one("SELECT COUNT(*) AS count FROM messages")["count"], 0)
+
+    @patch("app.services.market.market_service.snapshot", return_value=None)
+    @patch("app.services.ai._call_model")
+    def test_conflicting_dynamic_reaches_ai_validation(self, call_model, snapshot):
+        db.execute(
+            "UPDATE public_dynamics SET conflict_status = 'possible' WHERE id = ?",
+            (self.dynamic_id,),
+        )
+        call_model.return_value = valid_ai_result(self.primary_evidence_id)
+
+        response = self.client.post(
+            "/api/research/stream",
+            json={
+                "asset_id": self.asset_id,
+                "event_id": self.primary_evidence_id,
+                "dynamic_id": self.dynamic_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        events = {}
+        for block in response.text.strip().split("\n\n"):
+            lines = block.splitlines()
+            events[lines[0].removeprefix("event: ")] = json.loads(
+                lines[1].removeprefix("data: ")
+            )
+        result = events["completed"]["result"]
+        self.assertEqual(result["confidence"], "low")
+        self.assertEqual(result["impact_state"], "insufficient")
+        self.assertIn(
+            "来源信息存在冲突，相关事实尚待进一步核验。",
+            result["unknowns"],
+        )
 
     def test_dynamic_from_another_asset_is_rejected(self):
         now = db.utcnow()
