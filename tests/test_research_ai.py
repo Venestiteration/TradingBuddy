@@ -370,6 +370,26 @@ class ResearchAIValidationTest(unittest.TestCase):
                     "none",
                 )
 
+    def test_broad_direct_actions_are_rejected_in_user_facing_fields(self):
+        cases = (
+            valid_result(core_conclusion="不妨持有"),
+            valid_result(inferences=[{
+                "claim": "宜持有",
+                "evidence_ids": ["e1"],
+                "uncertainty": "仍需观察",
+            }]),
+            valid_result(core_conclusion="持仓不得超过三成"),
+            valid_result(inferences=[{
+                "claim": "暂不介入",
+                "evidence_ids": ["e1"],
+                "uncertainty": "仍需观察",
+            }]),
+        )
+
+        for result in cases:
+            with self.subTest(result=result), self.assertRaises(AIError):
+                validate_research_result(result, {"e1": sample_evidence()}, "none")
+
     def test_ordinary_explanatory_holding_language_is_not_rejected(self):
         result = valid_result(
             core_conclusion="公司持有子公司股权，目前仅能确认这一披露事实。"
@@ -381,20 +401,61 @@ class ResearchAIValidationTest(unittest.TestCase):
 
         self.assertEqual(cleaned["core_conclusion"], result["core_conclusion"])
 
-    def test_factual_subject_holding_language_is_not_rejected(self):
+    def test_factual_subject_holding_language_is_allowed_in_facts(self):
         factual_statements = (
             "公司可以持有子公司股权。",
             "基金必须持有百分之五的现金。",
             "监管建议银行持有充足资本。",
+            "法规要求基金持仓不低于八成。",
+            "公司将仓位降至半仓后披露了该事项。",
         )
 
         for statement in factual_statements:
             with self.subTest(statement=statement):
-                result = valid_result(core_conclusion=statement)
+                result = valid_result(
+                    facts=[{"claim": statement, "evidence_ids": ["e1"]}]
+                )
                 cleaned, _ = validate_research_result(
                     result, {"e1": sample_evidence()}, "none"
                 )
-                self.assertEqual(cleaned["core_conclusion"], statement)
+                self.assertEqual(cleaned["facts"][0]["claim"], statement)
+
+    def test_trading_like_fact_still_requires_valid_evidence(self):
+        invalid_evidence_sets = ([], ["missing"])
+
+        for evidence_ids in invalid_evidence_sets:
+            with self.subTest(evidence_ids=evidence_ids), self.assertRaises(AIError):
+                validate_research_result(
+                    valid_result(facts=[{
+                        "claim": "法规要求基金持仓不低于八成。",
+                        "evidence_ids": evidence_ids,
+                    }]),
+                    {"e1": sample_evidence()},
+                    "none",
+                )
+
+    def test_evidence_backed_factual_section_is_not_scanned_as_advice(self):
+        section = {
+            "heading": "已披露行为",
+            "body": "公司将仓位降至半仓后披露了该事项。",
+            "evidence_ids": ["e1"],
+        }
+
+        cleaned, _ = validate_research_result(
+            valid_result(sections=[section]), {"e1": sample_evidence()}, "none"
+        )
+
+        self.assertEqual(cleaned["sections"], [section])
+
+    def test_non_factual_section_direct_action_is_rejected(self):
+        result = valid_result(sections=[{
+            "heading": "下一步",
+            "body": "不妨持有",
+            "evidence_ids": [],
+        }])
+
+        with self.assertRaises(AIError):
+            validate_research_result(result, {"e1": sample_evidence()}, "none")
 
     def test_position_and_waiting_terms_without_directive_context_are_not_rejected(self):
         result = valid_result(

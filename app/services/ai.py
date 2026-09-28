@@ -117,10 +117,10 @@ IMPACT_LABELS = {
 
 _TRADING_ACTION = (
     r"(?:持有|回避|规避|暂避|买入|卖出|观望|配置|布局|"
-    r"建仓|加仓|减仓|清仓|减持|参与)"
+    r"建仓|加仓|减仓|清仓|减持|参与|介入)"
 )
 _TRADING_DIRECTIVE_PATTERN = re.compile(
-    r"(?:请|不要|不应|不宜|勿|切勿|务必|建议|应当|应该|应|必须|"
+    r"(?:不妨|宜|请|不要|不应|不宜|勿|切勿|务必|建议|应当|应该|应|必须|"
     r"可以|可|继续|耐心|坚定|安心|适合|推荐|择机|逢低|逢高|"
     r"分批|及时|立即|暂时|暂不|保持)"
     rf"[^。！？；，,:：;]{{0,10}}{_TRADING_ACTION}"
@@ -131,8 +131,8 @@ _POSITION_DIRECTIVE_PATTERN = re.compile(
     r"控制|调整|维持|保持|降低|提高|增加|减少)"
     r"[^。！？；，,:：;]{0,3}(?:仓位|持仓|半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
     r"|(?:仓位|持仓)[^。！？；，,:：;]{0,4}"
-    r"(?:不超过|不高于|不低于|至多|至少|降至|减至|调至|设为|"
-    r"控制在|维持在|提高至|降低至|加至)"
+    r"(?:不得超过|不超过|不高于|不低于|至多|至少|降至|减至|调至|设为|"
+    r"控制在|维持在|提高至|提高到|降低至|加至)"
     r"[^。！？；，,:：;]{0,3}(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十百分之]+成?)"
     r"|(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
     r"[^。！？；，,:：;]{0,3}(?:持有|观望|操作|参与)"
@@ -147,11 +147,7 @@ _USER_FACING_TRADING_PATTERN = re.compile(
     rf"[^。！？；，,:：;]{{0,8}}{_TRADING_ACTION}"
 )
 _DIRECT_TRADING_PHRASE_PATTERN = re.compile(
-    r"(?:持有为宜|暂不参与|不要持有)"
-)
-_FACTUAL_SUBJECT_PATTERN = re.compile(
-    r"(?:公司|企业|基金|监管(?:部门|机构)?|法规|规则)"
-    r"[^。！？；，,:：;]{0,12}$"
+    rf"(?:{_TRADING_ACTION}[^。！？；，,:：;]{{0,4}}为宜|暂不参与|不要持有)"
 )
 _EXPLICIT_TRADING_PATTERN = re.compile(
     r"(?:止损|止盈|目标价|抄底|逃顶|低吸|高抛|"
@@ -487,17 +483,6 @@ def _snapshot_numeric_tokens(evidence_lookup: dict[str, dict]) -> set[str]:
     return tokens
 
 
-def _result_strings(value: Any) -> Generator[str, None, None]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for child in value.values():
-            yield from _result_strings(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _result_strings(child)
-
-
 def _contains_trading_instruction(text: str) -> bool:
     for raw_clause in _TRADING_CLAUSE_SPLIT_PATTERN.split(text):
         clause = raw_clause.strip()
@@ -514,13 +499,28 @@ def _contains_trading_instruction(text: str) -> bool:
             )
         ):
             return True
-        for match in _TRADING_DIRECTIVE_PATTERN.finditer(clause):
-            # Company/fund/regulator obligations are explanatory facts unless
-            # the same clause contains a user, security, or position cue.
-            if _FACTUAL_SUBJECT_PATTERN.search(clause[:match.start()]):
-                continue
+        if _TRADING_DIRECTIVE_PATTERN.search(clause):
             return True
     return False
+
+
+def _trading_validation_strings(result: dict) -> Generator[str, None, None]:
+    """Yield only fields that can turn research output into user-facing advice."""
+    for field in (
+        "core_conclusion", "key_tension", "thesis_relationship",
+        "follow_up_question",
+    ):
+        yield result[field]
+    yield from result["watch_signals"]
+    for item in result["impact_paths"]:
+        yield item["path"]
+        yield item["uncertainty"]
+    for item in result["inferences"]:
+        yield item["claim"]
+    for section in result["sections"]:
+        if not section["evidence_ids"]:
+            yield section["heading"]
+            yield section["body"]
 
 
 def validate_research_result(
@@ -656,7 +656,10 @@ def validate_research_result(
                     f"{collection}[{index}]包含证据或行情快照未支持的数字 {unsupported[0]}",
                 )
 
-    if any(_contains_trading_instruction(text) for text in _result_strings(cleaned)):
+    if any(
+        _contains_trading_instruction(text)
+        for text in _trading_validation_strings(cleaned)
+    ):
         raise AIError("schema", "模型输出包含交易指令")
 
     notes: list[str] = []
