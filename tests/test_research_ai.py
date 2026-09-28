@@ -317,7 +317,9 @@ class ResearchAIValidationTest(unittest.TestCase):
     def test_common_hold_position_and_allocation_instructions_are_rejected(self):
         instructions = (
             "建议持有",
+            "应持有",
             "应当持有",
+            "必须持有",
             "可以持有",
             "半仓持有",
             "可继续持有",
@@ -327,6 +329,9 @@ class ResearchAIValidationTest(unittest.TestCase):
             "调整仓位",
             "维持仓位",
             "仓位控制在半仓",
+            "仓位降至半仓",
+            "仓位设为五成",
+            "保持半仓",
             "逢低配置",
             "逢低布局",
             "分批建仓",
@@ -334,7 +339,10 @@ class ResearchAIValidationTest(unittest.TestCase):
             "建议观望",
             "保持观望",
             "建议暂避",
+            "建议回避",
             "暂时规避",
+            "规避该股",
+            "空仓观望",
         )
 
         for instruction in instructions:
@@ -348,6 +356,17 @@ class ResearchAIValidationTest(unittest.TestCase):
     def test_ordinary_explanatory_holding_language_is_not_rejected(self):
         result = valid_result(
             core_conclusion="公司持有子公司股权，目前仅能确认这一披露事实。"
+        )
+
+        cleaned, _ = validate_research_result(
+            result, {"e1": sample_evidence()}, "none"
+        )
+
+        self.assertEqual(cleaned["core_conclusion"], result["core_conclusion"])
+
+    def test_position_and_waiting_terms_without_directive_context_are_not_rejected(self):
+        result = valid_result(
+            core_conclusion="机构持仓数据为五成，市场仍处于观望状态。"
         )
 
         cleaned, _ = validate_research_result(

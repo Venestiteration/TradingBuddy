@@ -115,15 +115,32 @@ IMPACT_LABELS = {
     "insufficient": "信息不足",
 }
 
-TRADING_PATTERN = re.compile(
-    r"(应该?买|应该?卖|建议买|建议卖|可以买|可以卖|买入|卖出|加仓|减仓|清仓|建仓|"
-    r"止损|止盈|目标价|抄底|逃顶|满仓|建议持有|应当持有|可以持有|半仓持有|"
-    r"继续持有|耐心持有|坚定持有|"
-    r"适合持有|推荐持有|控制仓位|调整仓位|保持仓位|降低仓位|提高仓位|"
-    r"维持仓位|仓位控制|逢低(?:配置|布局|买入|加仓)|逢高(?:卖出|减仓|减持)|"
-    r"分批(?:买入|卖出|建仓|配置)|"
-    r"择机(?:买入|卖出|配置)|建议配置|可以配置|低吸|高抛|建议观望|继续观望|"
-    r"保持观望|建议暂避|暂时规避|\b(?:buy|sell|hold)\b)",
+_TRADING_DIRECTIVE_PATTERN = re.compile(
+    r"(?:建议|应当|应该|应|必须|可以|可|继续|耐心|坚定|安心|适合|推荐|"
+    r"择机|逢低|逢高|分批|及时|立即|暂时|保持)"
+    r"[^。！？；，]{0,6}"
+    r"(?:持有|回避|规避|暂避|买入|卖出|观望|配置|布局|建仓|加仓|减仓|清仓|减持)"
+)
+_POSITION_DIRECTIVE_PATTERN = re.compile(
+    r"(?:"
+    r"(?:建议|应当|应该|应|必须|可以|可|"
+    r"控制|调整|维持|保持|降低|提高|增加|减少)"
+    r"[^。！？；，]{0,3}(?:仓位|持仓|半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
+    r"|(?:仓位|持仓)[^。！？；，]{0,4}"
+    r"(?:降至|减至|调至|设为|控制在|维持在|提高至|降低至|加至)"
+    r"[^。！？；，]{0,3}(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
+    r"|(?:半仓|空仓|轻仓|重仓|满仓|[0-9一二三四五六七八九十]+成)"
+    r"[^。！？；，]{0,3}(?:持有|观望|操作|参与)"
+    r")"
+)
+_EQUITY_AVOIDANCE_PATTERN = re.compile(
+    r"(?:回避|规避)(?:该股|本股|此股|股票|个股|该标的|本标的)"
+)
+_EXPLICIT_TRADING_PATTERN = re.compile(
+    r"(?:止损|止盈|目标价|抄底|逃顶|低吸|高抛|"
+    r"(?:^|[：:,，。；;\s])(?:买入|卖出|加仓|减仓|清仓|建仓)|"
+    r"(?:买入|卖出|加仓|减仓|清仓|建仓)\s*$|"
+    r"\b(?:buy|sell|hold)\b)",
     re.IGNORECASE,
 )
 
@@ -461,6 +478,18 @@ def _result_strings(value: Any) -> Generator[str, None, None]:
             yield from _result_strings(child)
 
 
+def _contains_trading_instruction(text: str) -> bool:
+    return any(
+        pattern.search(text)
+        for pattern in (
+            _TRADING_DIRECTIVE_PATTERN,
+            _POSITION_DIRECTIVE_PATTERN,
+            _EQUITY_AVOIDANCE_PATTERN,
+            _EXPLICIT_TRADING_PATTERN,
+        )
+    )
+
+
 def validate_research_result(
     result: dict,
     evidence_lookup: dict[str, dict],
@@ -594,7 +623,7 @@ def validate_research_result(
                     f"{collection}[{index}]包含证据或行情快照未支持的数字 {unsupported[0]}",
                 )
 
-    if any(TRADING_PATTERN.search(text) for text in _result_strings(cleaned)):
+    if any(_contains_trading_instruction(text) for text in _result_strings(cleaned)):
         raise AIError("schema", "模型输出包含交易指令")
 
     notes: list[str] = []
