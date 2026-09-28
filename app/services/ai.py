@@ -4,6 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
+from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 from typing import Any, Generator
 from urllib.parse import urlparse
 
@@ -12,15 +15,40 @@ import httpx
 from .. import database as db
 from ..config import settings
 from .evidence import get_evidence
+from .research_prompt import compose_research_prompt
 from .visitor_ai import VisitorAIConfig
 
-ANALYSIS_SCHEMA: dict[str, Any] = {
+
+_EVIDENCE_IDS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "string"},
+}
+
+RESEARCH_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "conclusion": {"type": "string"},
+        "answer_mode": {
+            "type": "string",
+            "enum": ["daily", "event", "question"],
+        },
+        "core_conclusion": {"type": "string"},
+        "key_tension": {"type": "string"},
         "impact_state": {
             "type": "string",
             "enum": ["unaffected", "watch", "may_affect", "insufficient"],
+        },
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "heading": {"type": "string"},
+                    "body": {"type": "string"},
+                    "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                },
+                "required": ["heading", "body", "evidence_ids"],
+                "additionalProperties": False,
+            },
         },
         "facts": {
             "type": "array",
@@ -28,12 +56,22 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "claim": {"type": "string"},
-                    "evidence_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
+                    "evidence_ids": _EVIDENCE_IDS_SCHEMA,
                 },
                 "required": ["claim", "evidence_ids"],
+                "additionalProperties": False,
+            },
+        },
+        "impact_paths": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "evidence_ids": _EVIDENCE_IDS_SCHEMA,
+                    "uncertainty": {"type": "string"},
+                },
+                "required": ["path", "evidence_ids", "uncertainty"],
                 "additionalProperties": False,
             },
         },
@@ -43,10 +81,7 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "claim": {"type": "string"},
-                    "evidence_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
+                    "evidence_ids": _EVIDENCE_IDS_SCHEMA,
                     "uncertainty": {"type": "string"},
                 },
                 "required": ["claim", "evidence_ids", "uncertainty"],
@@ -54,12 +89,20 @@ ANALYSIS_SCHEMA: dict[str, Any] = {
             },
         },
         "unknowns": {"type": "array", "items": {"type": "string"}},
-        "next_checks": {"type": "array", "items": {"type": "string"}},
+        "watch_signals": {"type": "array", "items": {"type": "string"}},
+        "thesis_relationship": {"type": "string"},
+        "follow_up_question": {"type": "string"},
+        "confidence": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+        },
         "safety_boundary": {"type": "string"},
     },
     "required": [
-        "conclusion", "impact_state", "facts", "inferences",
-        "unknowns", "next_checks", "safety_boundary",
+        "answer_mode", "core_conclusion", "key_tension", "impact_state",
+        "sections", "facts", "impact_paths", "inferences", "unknowns",
+        "watch_signals", "thesis_relationship", "follow_up_question",
+        "confidence", "safety_boundary",
     ],
     "additionalProperties": False,
 }
@@ -73,8 +116,22 @@ IMPACT_LABELS = {
 
 TRADING_PATTERN = re.compile(
     r"(应该?买|应该?卖|建议买|建议卖|可以买|可以卖|买入|卖出|加仓|减仓|清仓|建仓|"
-    r"止损|止盈|目标价|抄底|逃顶|满仓)"
+    r"止损|止盈|目标价|抄底|逃顶|满仓|\b(?:buy|sell)\b)",
+    re.IGNORECASE,
 )
+
+_SNAPSHOT_NUMERIC_FIELDS = {
+    "price", "prev_close", "open", "high", "low", "change_pct", "volume",
+    "amount", "pe_dynamic", "pb", "market_cap", "price_time", "fetched_at",
+}
+_SNAPSHOT_LOOKUP_KEYS = {"__market_snapshot__", "market_snapshot"}
+_REFERENCE_FIELDS = {
+    "sections": ("heading", "body"),
+    "facts": ("claim",),
+    "impact_paths": ("path", "uncertainty"),
+    "inferences": ("claim", "uncertainty"),
+}
+_NUMERIC_TOKEN_PATTERN = re.compile(r"(?<![\d.])[-+]?\d[\d,]*(?:\.\d+)?%?")
 
 
 class AIError(RuntimeError):
@@ -201,7 +258,7 @@ def call_structured_model(
     try:
         if _uses_chat_api(config):
             # 智谱兼容 OpenAI 的 Chat Completions，但不提供项目原先调用的
-            # /responses 路径。使用 JSON mode，再由 validate_result 做字段
+            # /responses 路径。使用 JSON mode，再由 validate_research_result 做字段
             # 和证据引用的二次校验。
             chat_kwargs = {
                 "model": config.model,
@@ -277,139 +334,195 @@ def call_structured_model(
 
 
 def _call_model(config: VisitorAIConfig, instructions: str, context: dict) -> dict:
-    """调用投研分析模型并解析既有分析结构。"""
+    """调用投研分析模型并解析严格研究结构。"""
     return call_structured_model(
         config,
         instructions,
         context,
-        ANALYSIS_SCHEMA,
-        "grounded_analysis",
+        RESEARCH_SCHEMA,
+        "grounded_research",
     )
 
 
-def validate_result(result: dict, evidence_lookup: dict[str, dict]) -> tuple[dict, list[str]]:
-    """校验并清洗结构化输出。返回 (清洗后结果, 处理说明)。"""
-    notes: list[str] = []
+def _expect_exact_object(
+    value: Any, required: set[str], label: str
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise AIError("schema", f"{label}必须是 JSON 对象")
+    missing = sorted(required - set(value))
+    if missing:
+        raise AIError("schema", f"{label}缺少字段 {missing[0]}")
+    extra = sorted(set(value) - required)
+    if extra:
+        raise AIError("schema", f"{label}包含额外字段 {extra[0]}")
+    return value
 
-    if not isinstance(result, dict):
-        raise AIError("schema", "模型输出不是 JSON 对象")
-    for field in ("conclusion", "impact_state", "facts", "inferences",
-                  "unknowns", "next_checks", "safety_boundary"):
-        if field not in result:
-            raise AIError("schema", f"缺少字段 {field}")
-    if result["impact_state"] not in IMPACT_LABELS:
-        notes.append("impact_state 非法，已降级为 insufficient")
-        result["impact_state"] = "insufficient"
 
-    def clean_refs(items: list, kind: str) -> list[dict]:
-        cleaned = []
-        for item in items:
-            if not isinstance(item, dict) or not str(item.get("claim", "")).strip():
-                continue
-            valid_ids, had_invalid = [], False
-            for evidence_id in item.get("evidence_ids") or []:
-                if evidence_id in evidence_lookup:
-                    valid_ids.append(evidence_id)
-                else:
-                    had_invalid = True
-            if had_invalid:
-                notes.append(f"{kind}中存在无效证据编号，已删除")
-            cleaned.append({
-                "claim": str(item["claim"]).strip(),
-                "evidence_ids": valid_ids,
-                **({"uncertainty": str(item.get("uncertainty", "")).strip()}
-                   if "uncertainty" in item or kind == "inferences" else {}),
-            })
-        return cleaned
+def _expect_string(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise AIError("schema", f"{label}必须是字符串")
+    return value
 
-    facts = clean_refs(result.get("facts") or [], "已知事实")
-    # 无有效引用的事实不得进入"已知事实"
-    facts = [fact for fact in facts if fact["evidence_ids"]]
-    inferences = clean_refs(result.get("inferences") or [], "推断")
 
-    only_title_evidence = all(
-        evidence.get("content_status") == "title_only"
-        for evidence in evidence_lookup.values()
-    ) and bool(evidence_lookup)
-    if only_title_evidence and facts:
-        notes.append("本次证据仅有标题，正文级事实已降级为推断")
-        for fact in facts:
-            fact["claim"] = f"（标题信息）{fact['claim']}"
-        inferences = [{"claim": fact["claim"], "evidence_ids": fact["evidence_ids"],
-                       "uncertainty": "仅有标题，无法核验细节"} for fact in facts]
-        facts = []
+def _expect_string_list(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list):
+        raise AIError("schema", f"{label}必须是数组")
+    for index, item in enumerate(value):
+        _expect_string(item, f"{label}[{index}]")
+    return value
 
-    result["facts"] = facts
-    result["inferences"] = inferences
-    result["unknowns"] = [str(item) for item in (result.get("unknowns") or []) if str(item).strip()]
-    result["next_checks"] = [str(item) for item in (result.get("next_checks") or []) if str(item).strip()]
-    result["safety_boundary"] = str(result.get("safety_boundary") or "").strip() or (
-        "以上为研究信息整理，不构成投资建议。"
-    )
 
-    if TRADING_PATTERN.search(str(result.get("conclusion", ""))):
-        result["conclusion"] = (
-            "（以下为条件化分析，非交易指令）" + str(result["conclusion"])
+def _canonical_number(token: str) -> str:
+    normalized = unicodedata.normalize("NFKC", token).replace(",", "").rstrip("%")
+    if normalized.startswith("+"):
+        normalized = normalized[1:]
+    try:
+        number = Decimal(normalized)
+    except InvalidOperation:
+        return normalized
+    if number == number.to_integral():
+        return str(number.quantize(Decimal("1")))
+    return format(number.normalize(), "f")
+
+
+def _numeric_tokens(value: Any) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    return {_canonical_number(token) for token in _NUMERIC_TOKEN_PATTERN.findall(normalized)}
+
+
+def _snapshot_numeric_tokens(evidence_lookup: dict[str, dict]) -> set[str]:
+    snapshot: dict[str, Any] = {}
+    for key in _SNAPSHOT_LOOKUP_KEYS:
+        candidate = evidence_lookup.get(key)
+        if isinstance(candidate, dict):
+            snapshot.update(candidate)
+    tokens: set[str] = set()
+    for field in _SNAPSHOT_NUMERIC_FIELDS:
+        if field in snapshot:
+            tokens.update(_numeric_tokens(snapshot[field]))
+    return tokens
+
+
+def _result_strings(value: Any) -> Generator[str, None, None]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _result_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _result_strings(child)
+
+
+def validate_research_result(
+    result: dict,
+    evidence_lookup: dict[str, dict],
+    conflict_status: str,
+) -> tuple[dict, list[str]]:
+    """严格校验模型研究输出；不修改或吞掉证据违规。"""
+    top_fields = set(RESEARCH_SCHEMA["required"])
+    _expect_exact_object(result, top_fields, "模型输出")
+    cleaned = deepcopy(result)
+
+    for field in (
+        "core_conclusion", "key_tension", "thesis_relationship",
+        "follow_up_question", "safety_boundary",
+    ):
+        _expect_string(cleaned[field], field)
+    _expect_string(cleaned["answer_mode"], "answer_mode")
+    _expect_string(cleaned["impact_state"], "impact_state")
+    _expect_string(cleaned["confidence"], "confidence")
+    if cleaned["answer_mode"] not in {"daily", "event", "question"}:
+        raise AIError("schema", "answer_mode 非法")
+    if cleaned["impact_state"] not in IMPACT_LABELS:
+        raise AIError("schema", "impact_state 非法")
+    if cleaned["confidence"] not in {"low", "medium", "high"}:
+        raise AIError("schema", "confidence 非法")
+
+    _expect_string_list(cleaned["unknowns"], "unknowns")
+    _expect_string_list(cleaned["watch_signals"], "watch_signals")
+
+    valid_evidence_ids = {
+        evidence_id
+        for evidence_id, evidence in evidence_lookup.items()
+        if (
+            isinstance(evidence_id, str)
+            and evidence_id not in _SNAPSHOT_LOOKUP_KEYS
+            and isinstance(evidence, dict)
         )
-        notes.append("结论涉及交易指令表述，已改为条件化分析")
-
-    # 证据不足时强制降级
-    if not facts and result["impact_state"] not in ("insufficient",):
-        result["impact_state"] = "insufficient"
-        notes.append("无有效引用事实，影响状态降级为 insufficient")
-    return result, notes
-
-
-def _build_context(
-    code: str,
-    name: str,
-    question: str,
-    snapshot: dict | None,
-    event: dict | None,
-    evidence_items: list[dict],
-    thesis: dict | None,
-    recent_messages: list[dict],
-) -> dict:
-    context: dict[str, Any] = {
-        "stock": {"code": code, "name": name},
-        "question": question,
-        "product_boundary": "仅做研究信息整理；禁止买卖建议、目标价与交易时点；输出为中文结构化 JSON。",
     }
-    if snapshot:
-        context["market_snapshot"] = {
-            key: snapshot.get(key)
-            for key in ("price", "prev_close", "open", "high", "low", "change_pct",
-                        "volume", "amount", "pe_dynamic", "pb", "price_time")
-        }
-    if event:
-        context["event"] = {
-            "event_id": event.get("event_id"),
-            "title": event.get("title"),
-            "published_at": event.get("published_at"),
-            "source_type": event.get("source_type"),
-        }
-    context["evidence"] = [
-        {
-            "evidence_id": item["evidence_id"],
-            "source_type": item["source_type"],
-            "source_level": item["source_level"],
-            "title": item["title"],
-            "excerpt": item["excerpt"],
-            "published_at": item["published_at"],
-            "content_status": item["content_status"],
-        }
-        for item in evidence_items
-    ]
-    if thesis:
-        context["user_thesis"] = {
-            "version": thesis.get("version"),
-            "core_thesis": thesis.get("core_thesis"),
-            "watch_variables": thesis.get("watch_variables"),
-            "invalid_conditions": thesis.get("invalid_conditions"),
-        }
-    if recent_messages:
-        context["recent_messages"] = recent_messages[-6:]
-    return context
+    item_fields = {
+        "sections": {"heading", "body", "evidence_ids"},
+        "facts": {"claim", "evidence_ids"},
+        "impact_paths": {"path", "evidence_ids", "uncertainty"},
+        "inferences": {"claim", "evidence_ids", "uncertainty"},
+    }
+    for collection, required in item_fields.items():
+        items = cleaned[collection]
+        if not isinstance(items, list):
+            raise AIError("schema", f"{collection}必须是数组")
+        for index, item in enumerate(items):
+            label = f"{collection}[{index}]"
+            _expect_exact_object(item, required, label)
+            for field in required - {"evidence_ids"}:
+                _expect_string(item[field], f"{label}.{field}")
+            evidence_ids = _expect_string_list(
+                item["evidence_ids"], f"{label}.evidence_ids"
+            )
+            if collection == "facts" and not evidence_ids:
+                raise AIError("schema", f"{label}必须引用至少一条证据")
+            invalid_ids = [
+                evidence_id
+                for evidence_id in evidence_ids
+                if evidence_id not in valid_evidence_ids
+            ]
+            if invalid_ids:
+                raise AIError("schema", f"{label}引用了无效证据 {invalid_ids[0]}")
+
+    snapshot_numbers = _snapshot_numeric_tokens(evidence_lookup)
+    for collection in ("facts", "sections"):
+        for index, item in enumerate(cleaned[collection]):
+            text = " ".join(item[field] for field in _REFERENCE_FIELDS[collection])
+            claimed_numbers = _numeric_tokens(text)
+            if not claimed_numbers:
+                continue
+            supported_numbers = set(snapshot_numbers)
+            cited_numbers: set[str] = set()
+            has_title_only_reference = False
+            for evidence_id in item["evidence_ids"]:
+                evidence = evidence_lookup[evidence_id]
+                evidence_numbers = _numeric_tokens(evidence.get("title"))
+                evidence_numbers.update(_numeric_tokens(evidence.get("excerpt")))
+                supported_numbers.update(evidence_numbers)
+                cited_numbers.update(evidence_numbers)
+                if evidence.get("content_status") == "title_only":
+                    has_title_only_reference = True
+            if has_title_only_reference:
+                title_only_unsupported = sorted(claimed_numbers - cited_numbers)
+                if title_only_unsupported:
+                    raise AIError(
+                        "schema",
+                        f"{collection}[{index}]为仅标题证据添加了数字 "
+                        f"{title_only_unsupported[0]}",
+                    )
+            unsupported = sorted(claimed_numbers - supported_numbers)
+            if unsupported:
+                raise AIError(
+                    "schema",
+                    f"{collection}[{index}]包含证据或行情快照未支持的数字 {unsupported[0]}",
+                )
+
+    if any(TRADING_PATTERN.search(text) for text in _result_strings(cleaned)):
+        raise AIError("schema", "模型输出包含交易指令")
+
+    notes: list[str] = []
+    if conflict_status == "possible":
+        cleaned["confidence"] = "low"
+        cleaned["impact_state"] = "insufficient"
+        if not any("冲突" in item for item in cleaned["unknowns"]):
+            cleaned["unknowns"].append("来源信息存在冲突，相关事实尚待进一步核验。")
+        notes.append("来源存在冲突，已将置信度降为 low 并标记信息不足")
+    return cleaned, notes
 
 
 def _sse(event_name: str, payload: dict) -> str:
@@ -418,23 +531,29 @@ def _sse(event_name: str, payload: dict) -> str:
 
 def run_grounded_stream(
     config: VisitorAIConfig,
-    mode: str,                      # research / chat
-    asset: dict,
-    question: str,
-    event: dict | None,
-    evidence_items: list[dict],
-    thesis: dict | None,
-    recent_messages: list[dict],
-    snapshot: dict | None,
+    mode: str,
+    context: dict,
+    conflict_status: str,
 ) -> Generator[str, None, None]:
     """执行一次真实模型调用，按 SSE 状态推进，结束时产出 completed / failed 事件。"""
-    instructions = settings.prompt_path.read_text(encoding="utf-8")
-    code, name = asset["stock_code"], asset["stock_name"]
-    lookup = {item["evidence_id"]: item for item in evidence_items}
-    context = _build_context(code, name, question, snapshot, event, evidence_items,
-                             thesis, recent_messages)
-    fingerprint = evidence_fingerprint(list(lookup.keys()))
-    thesis_version = (thesis or {}).get("version")
+    prompt_mode = "event" if mode == "research" else mode
+    instructions = compose_research_prompt(prompt_mode)
+    model_context = deepcopy(context)
+    evidence_items = [
+        item for item in model_context.get("evidence", [])
+        if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
+    ]
+    lookup = {str(item["evidence_id"]): item for item in evidence_items}
+    validation_lookup = dict(lookup)
+    snapshot = model_context.get("market_snapshot")
+    if isinstance(snapshot, dict):
+        validation_lookup["__market_snapshot__"] = snapshot
+    fingerprint = evidence_fingerprint(list(lookup))
+    selected_event = model_context.get("selected_event")
+    selected_event = selected_event if isinstance(selected_event, dict) else {}
+    thesis = model_context.get("confirmed_thesis")
+    thesis_version = thesis.get("version") if isinstance(thesis, dict) else None
+    question = str(model_context.get("question") or "")
 
     yield _sse("status", {"state": "context_ready", "evidence_count": len(lookup)})
 
@@ -443,25 +562,31 @@ def run_grounded_stream(
     last_error: AIError | None = None
     for attempt in range(2):  # 校验失败允许重试一次
         try:
-            candidate = _call_model(config, instructions, context)
+            candidate = _call_model(config, instructions, model_context)
         except AIError as exc:
             last_error = exc
-            break  # 网络/额度类错误重试无意义
+            if exc.category != "schema" or attempt == 1:
+                break  # 网络/额度类错误重试无意义
+            model_context["validation_feedback"] = (
+                f"上一次输出无法解析（{exc}）。"
+                "请严格返回符合 Schema 的 JSON，不要输出 Markdown 或说明文字。"
+            )
+            continue
         try:
             yield _sse("status", {"state": "validating"})
-            result, notes = validate_result(candidate, lookup)
-            if notes and attempt == 0:
-                context["validation_feedback"] = (
-                    f"上一次输出存在以下问题，请修正后重新输出：{'；'.join(notes)}"
-                )
-                result = None
-                continue
+            result, _notes = validate_research_result(
+                candidate, validation_lookup, conflict_status
+            )
             break
         except AIError as exc:
             last_error = exc
+            result = None
             if attempt == 1:
                 break
-            context["validation_feedback"] = f"上一次输出不符合 Schema（{exc}），请严格按 Schema 输出。"
+            model_context["validation_feedback"] = (
+                f"上一次输出未通过研究校验（{exc}）。"
+                "请仅使用已提供证据并严格按 Schema 修复后重新输出。"
+            )
 
     if result is None:
         category = last_error.category if last_error else "schema"
@@ -469,17 +594,31 @@ def run_grounded_stream(
         yield _sse("failed", {"category": category, "message": message})
         return
 
+    compatibility_result = {
+        **result,
+        "conclusion": result["core_conclusion"],
+        "next_checks": list(result["watch_signals"]),
+    }
+    referenced_ids = sorted({
+        evidence_id
+        for collection in ("sections", "facts", "impact_paths", "inferences")
+        for item in result[collection]
+        for evidence_id in item["evidence_ids"]
+    })
     yield _sse("completed", {
         "mode": mode,
         "question": question,
-        "event_id": (event or {}).get("event_id"),
+        "event_id": selected_event.get("event_id") or selected_event.get("cluster_id"),
+        "cluster_id": selected_event.get("cluster_id"),
         "evidence_fingerprint": fingerprint,
         "thesis_version": thesis_version,
         "model": config.model,
         "created_at": db.utcnow(),
-        "result": result,
+        "result": compatibility_result,
         "impact_label": IMPACT_LABELS.get(result["impact_state"], "信息不足"),
-        "evidence": [item for item in (get_evidence(eid) or {} for eid in
-                                       sorted({eid for fact in result["facts"]
-                                               for eid in fact["evidence_ids"]}))],
+        "evidence": [
+            evidence
+            for evidence in (get_evidence(evidence_id) for evidence_id in referenced_ids)
+            if evidence
+        ],
     })

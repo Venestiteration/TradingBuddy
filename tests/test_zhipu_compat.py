@@ -30,6 +30,13 @@ ZHIPU_FLASH_CONFIG = VisitorAIConfig(
     resolved_ips=("8.8.8.8",),
 )
 
+OPENAI_CONFIG = VisitorAIConfig(
+    api_key="visitor-key",
+    model="gpt-test",
+    base_url="https://api.openai.com/v1",
+    resolved_ips=("8.8.8.8",),
+)
+
 
 class FakeChatCompletions:
     def __init__(self):
@@ -51,8 +58,14 @@ class FakeChatCompletions:
 class FakeClient:
     def __init__(self):
         self.chat = SimpleNamespace(completions=FakeChatCompletions())
+        self.responses = SimpleNamespace(create=self.create_response)
+        self.response_kwargs = None
         self.closed = False
         self.close_error = None
+
+    def create_response(self, **kwargs):
+        self.response_kwargs = kwargs
+        return SimpleNamespace(output_text=json.dumps({"impact_state": "insufficient"}))
 
     def close(self):
         self.closed = True
@@ -61,6 +74,43 @@ class FakeClient:
 
 
 class ZhipuCompatibilityTest(unittest.TestCase):
+    def test_research_schema_is_sent_to_openai_responses(self):
+        original_client = ai._client
+        try:
+            fake = FakeClient()
+            ai._client = lambda config: fake
+
+            ai._call_model(
+                OPENAI_CONFIG,
+                "system instructions",
+                {"asset": {"stock_code": "600519"}},
+            )
+
+            format_config = fake.response_kwargs["text"]["format"]
+            self.assertTrue(format_config["strict"])
+            self.assertEqual(format_config["schema"], ai.RESEARCH_SCHEMA)
+            self.assertEqual(format_config["name"], "grounded_research")
+        finally:
+            ai._client = original_client
+
+    def test_research_schema_is_included_for_chat_json_mode(self):
+        original_client = ai._client
+        try:
+            fake = FakeClient()
+            ai._client = lambda config: fake
+
+            ai._call_model(
+                CHAT_CONFIG,
+                "system instructions",
+                {"asset": {"stock_code": "600519"}},
+            )
+
+            system_message = fake.chat.completions.kwargs["messages"][0]["content"]
+            self.assertIn('"core_conclusion"', system_message)
+            self.assertIn('"additionalProperties": false', system_message)
+        finally:
+            ai._client = original_client
+
     def test_zhipu_json_code_fence_is_parsed(self):
         original_client = ai._client
         try:
