@@ -87,6 +87,54 @@ class ResearchContextTest(unittest.TestCase):
             ["e1", "e2", "e3"],
         )
 
+    def test_daily_brief_nested_evidence_and_raw_are_removed_from_context(self):
+        headline_evidence = [sample_evidence(index) for index in range(15)]
+        daily_brief = {
+            "headline": {
+                "cluster_id": "1:20",
+                "title": "主要合同进展",
+                "evidence": headline_evidence,
+                "raw": {"provider_payload": "must-not-leak"},
+            },
+            "known_facts": [
+                {
+                    "claim": "公司披露合同进展",
+                    "evidence_ids": ["e0"],
+                    "detail": {
+                        "evidence": [headline_evidence[0]],
+                        "raw": {"model_input": "must-not-leak"},
+                    },
+                }
+            ],
+            "events": [],
+        }
+        context = select_research_context(
+            asset={"stock_code": "600000", "stock_name": "浦发银行"},
+            question="合同进展如何？",
+            snapshot=None,
+            selected_event=None,
+            daily_brief=daily_brief,
+            evidence_items=[],
+            thesis=None,
+            recent_messages=[],
+        )
+
+        def nested_keys(value):
+            if isinstance(value, dict):
+                return set(value) | {
+                    key
+                    for child in value.values()
+                    for key in nested_keys(child)
+                }
+            if isinstance(value, list):
+                return {
+                    key for child in value for key in nested_keys(child)
+                }
+            return set()
+
+        self.assertEqual(len(context["evidence"]), 12)
+        self.assertFalse({"evidence", "raw"} & nested_keys(context["daily_brief"]))
+
     def test_question_overlap_excludes_items_older_than_90_days(self):
         recent = sample_evidence(
             1,
@@ -151,6 +199,41 @@ class ResearchContextTest(unittest.TestCase):
             recent_messages=[],
         )
         self.assertEqual(context["evidence"], [])
+
+    def test_missing_and_unknown_source_types_are_not_accepted_as_evidence(self):
+        missing = {**sample_evidence(97)}
+        missing.pop("source_type")
+        unknown = {**sample_evidence(98), "source_type": "generated_summary"}
+        context = select_research_context(
+            asset={"stock_code": "600000", "stock_name": "浦发银行"},
+            question="合同有什么影响？",
+            snapshot=None,
+            selected_event=selected_event([missing, unknown]),
+            daily_brief={"events": []},
+            evidence_items=[missing, unknown],
+            thesis=None,
+            recent_messages=[],
+        )
+        self.assertEqual(context["evidence"], [])
+
+    def test_original_evidence_source_types_are_accepted(self):
+        evidence = []
+        for index, source_type in enumerate(("market", "announcement", "news")):
+            evidence.append({**sample_evidence(index), "source_type": source_type})
+        context = select_research_context(
+            asset={"stock_code": "600000", "stock_name": "浦发银行"},
+            question="合同有什么影响？",
+            snapshot=None,
+            selected_event=selected_event(evidence),
+            daily_brief={"events": []},
+            evidence_items=evidence,
+            thesis=None,
+            recent_messages=[],
+        )
+        self.assertEqual(
+            [item["source_type"] for item in context["evidence"]],
+            ["market", "announcement", "news"],
+        )
 
     def test_recent_messages_are_relevant_labeled_trimmed_and_last_six(self):
         messages = [
@@ -228,6 +311,40 @@ class ResearchContextTest(unittest.TestCase):
             recent_messages=[],
         )
         self.assertNotIn("confirmed_thesis", context)
+
+    def test_thesis_without_affirmative_confirmation_marker_is_not_included(self):
+        context = select_research_context(
+            asset={"stock_code": "600000", "stock_name": "浦发银行"},
+            question="公司怎么样？",
+            snapshot=None,
+            selected_event=None,
+            daily_brief={"events": []},
+            evidence_items=[],
+            thesis={"version": 4, "core_thesis": "收入稳定"},
+            recent_messages=[],
+        )
+        self.assertNotIn("confirmed_thesis", context)
+
+    def test_confirmed_true_allows_whitelisted_thesis_fields(self):
+        context = select_research_context(
+            asset={"stock_code": "600000", "stock_name": "浦发银行"},
+            question="公司怎么样？",
+            snapshot=None,
+            selected_event=None,
+            daily_brief={"events": []},
+            evidence_items=[],
+            thesis={
+                "version": 4,
+                "core_thesis": "收入稳定",
+                "confirmed": True,
+                "ai_suggestion": "不应包含",
+            },
+            recent_messages=[],
+        )
+        self.assertEqual(
+            context["confirmed_thesis"],
+            {"version": 4, "core_thesis": "收入稳定"},
+        )
 
     def test_question_focus_changes_density_not_safety(self):
         self.assertEqual(classify_question_focus("这个市盈率是什么意思？"), "concept")

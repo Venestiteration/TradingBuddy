@@ -79,17 +79,10 @@ _DAILY_BRIEF_FIELDS = (
     "conflict_status",
 )
 
-_AI_SOURCE_TYPES = {
-    "ai",
-    "ai_output",
-    "assistant",
-    "assistant_output",
-    "llm",
-    "model",
-    "model_output",
-}
-_CONFIRMED_STATUSES = {"已由你确认", "已确认", "confirmed", "active"}
+_ORIGINAL_SOURCE_TYPES = {"market", "announcement", "news"}
+_CONFIRMED_STATUSES = {"已由你确认", "已确认", "confirmed"}
 _NORMALIZED_CONFIRMED_STATUSES = {value.lower() for value in _CONFIRMED_STATUSES}
+_EMBEDDED_EVIDENCE_KEYS = {"evidence", "raw", "sources", "events"}
 
 _TRADING_TERMS = (
     "买入",
@@ -176,6 +169,18 @@ def _pick(source: dict | None, fields: tuple[str, ...]) -> dict:
     return {field: deepcopy(source[field]) for field in fields if field in source}
 
 
+def _without_embedded_evidence(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_embedded_evidence(child)
+            for key, child in value.items()
+            if key not in _EMBEDDED_EVIDENCE_KEYS
+        }
+    if isinstance(value, list):
+        return [_without_embedded_evidence(child) for child in value]
+    return deepcopy(value)
+
+
 def _parse_time(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         parsed = value
@@ -210,7 +215,7 @@ def _valid_evidence(item: Any) -> bool:
     if not isinstance(item, dict) or not str(item.get("evidence_id") or "").strip():
         return False
     source_type = str(item.get("source_type") or "").strip().lower()
-    return source_type not in _AI_SOURCE_TYPES
+    return source_type in _ORIGINAL_SOURCE_TYPES
 
 
 def _main_daily_evidence(daily_brief: dict) -> list[dict]:
@@ -325,11 +330,12 @@ def _confirmed_thesis(thesis: dict | None) -> dict | None:
     if not isinstance(thesis, dict):
         return None
     status = thesis.get("status")
-    explicitly_rejected = (
+    confirmed = thesis.get("confirmed")
+    status_is_confirmed = (
         status is not None
-        and str(status).strip().lower() not in _NORMALIZED_CONFIRMED_STATUSES
+        and str(status).strip().lower() in _NORMALIZED_CONFIRMED_STATUSES
     )
-    if thesis.get("confirmed") is False or explicitly_rejected:
+    if confirmed is False or not (confirmed is True or status_is_confirmed):
         return None
     selected = _pick(thesis, _THESIS_FIELDS)
     return selected or None
@@ -351,7 +357,9 @@ def select_research_context(
         "question": str(question or "").strip(),
         "question_focus": classify_question_focus(question),
         "product_boundary": PRODUCT_BOUNDARY,
-        "daily_brief": _pick(daily_brief, _DAILY_BRIEF_FIELDS),
+        "daily_brief": _without_embedded_evidence(
+            _pick(daily_brief, _DAILY_BRIEF_FIELDS)
+        ),
         "evidence": _selected_evidence(
             question, selected_event, daily_brief, evidence_items
         ),
