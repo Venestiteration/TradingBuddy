@@ -15,6 +15,7 @@ import httpx
 from .. import database as db
 from ..config import settings
 from .evidence import get_evidence
+from .research_context import select_research_context
 from .research_prompt import compose_research_prompt
 from .visitor_ai import VisitorAIConfig
 
@@ -116,7 +117,12 @@ IMPACT_LABELS = {
 
 TRADING_PATTERN = re.compile(
     r"(应该?买|应该?卖|建议买|建议卖|可以买|可以卖|买入|卖出|加仓|减仓|清仓|建仓|"
-    r"止损|止盈|目标价|抄底|逃顶|满仓|\b(?:buy|sell)\b)",
+    r"止损|止盈|目标价|抄底|逃顶|满仓|建议持有|继续持有|耐心持有|坚定持有|"
+    r"适合持有|推荐持有|控制仓位|调整仓位|保持仓位|降低仓位|提高仓位|"
+    r"维持仓位|仓位控制|逢低(?:配置|布局|买入|加仓)|逢高(?:卖出|减仓|减持)|"
+    r"分批(?:买入|卖出|建仓|配置)|"
+    r"择机(?:买入|卖出|配置)|建议配置|可以配置|低吸|高抛|建议观望|继续观望|"
+    r"建议暂避|\b(?:buy|sell|hold)\b)",
     re.IGNORECASE,
 )
 
@@ -132,6 +138,17 @@ _REFERENCE_FIELDS = {
     "inferences": ("claim", "uncertainty"),
 }
 _NUMERIC_TOKEN_PATTERN = re.compile(r"(?<![\d.])[-+]?\d[\d,]*(?:\.\d+)?%?")
+_CONFLICT_UNKNOWN = "来源信息存在冲突，相关事实尚待进一步核验。"
+_NO_CONFLICT_PATTERN = re.compile(r"(?:未发现|不存在|没有|无)(?:明显)?冲突")
+_TITLE_ONLY_SAFE_PHRASES = (
+    "仅有标题信息", "标题信息", "标题显示", "标题披露", "标题提及",
+    "正文未提供", "正文缺失", "无法核验", "尚待核验", "待核验",
+    "原因无法核验", "影响无法核验", "结果无法核验", "细节无法核验",
+    "证据不足", "已确认判断", "等待后续公告", "后续公告",
+    "后续披露", "补充公告", "尚不清楚", "不清楚", "未披露", "未知",
+    "仅有标题", "仅标题", "标题", "正文", "信息", "证据", "相关事实",
+)
+_TITLE_ONLY_IGNORABLE_CHARS = "的了已与和及、但仅为是否可并对于于将尚待需"
 
 
 class AIError(RuntimeError):
@@ -390,6 +407,34 @@ def _numeric_tokens(value: Any) -> set[str]:
     return {_canonical_number(token) for token in _NUMERIC_TOKEN_PATTERN.findall(normalized)}
 
 
+def _title_only_lexical_tokens(value: Any, *, remove_safe_phrases: bool) -> set[str]:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).lower()
+    if remove_safe_phrases:
+        for phrase in sorted(_TITLE_ONLY_SAFE_PHRASES, key=len, reverse=True):
+            normalized = normalized.replace(phrase, "")
+        normalized = normalized.translate(
+            str.maketrans("", "", _TITLE_ONLY_IGNORABLE_CHARS)
+        )
+    normalized = _NUMERIC_TOKEN_PATTERN.sub("", normalized)
+    chinese = set(re.findall(r"[\u4e00-\u9fff]", normalized))
+    latin = set(re.findall(r"[a-z][a-z0-9_.-]*", normalized))
+    return chinese | latin
+
+
+def _assert_title_only_supported(text: str, titles: list[str], label: str) -> None:
+    source_text = " ".join(titles)
+    unsupported_numbers = sorted(
+        _numeric_tokens(text) - _numeric_tokens(source_text)
+    )
+    unsupported_terms = sorted(
+        _title_only_lexical_tokens(text, remove_safe_phrases=True)
+        - _title_only_lexical_tokens(source_text, remove_safe_phrases=False)
+    )
+    if unsupported_numbers or unsupported_terms:
+        detail = unsupported_numbers[0] if unsupported_numbers else unsupported_terms[0]
+        raise AIError("schema", f"{label}超出仅标题证据可支持的内容 {detail}")
+
+
 def _snapshot_numeric_tokens(evidence_lookup: dict[str, dict]) -> set[str]:
     snapshot: dict[str, Any] = {}
     for key in _SNAPSHOT_LOOKUP_KEYS:
@@ -479,6 +524,40 @@ def validate_research_result(
             if invalid_ids:
                 raise AIError("schema", f"{label}引用了无效证据 {invalid_ids[0]}")
 
+    public_evidence = {
+        evidence_id: evidence_lookup[evidence_id]
+        for evidence_id in valid_evidence_ids
+    }
+    all_evidence_is_title_only = bool(public_evidence) and all(
+        evidence.get("content_status") == "title_only"
+        for evidence in public_evidence.values()
+    )
+    all_titles = [str(evidence.get("title") or "") for evidence in public_evidence.values()]
+    if all_evidence_is_title_only:
+        global_title_fields = (
+            "core_conclusion", "key_tension", "thesis_relationship",
+        )
+        for field in global_title_fields:
+            _assert_title_only_supported(cleaned[field], all_titles, field)
+        for field in ("watch_signals", "unknowns"):
+            for index, text in enumerate(cleaned[field]):
+                _assert_title_only_supported(text, all_titles, f"{field}[{index}]")
+
+    for collection, text_fields in _REFERENCE_FIELDS.items():
+        for index, item in enumerate(cleaned[collection]):
+            cited = [public_evidence[evidence_id] for evidence_id in item["evidence_ids"]]
+            title_only_scope = (
+                cited
+                if cited and all(evidence.get("content_status") == "title_only" for evidence in cited)
+                else list(public_evidence.values()) if not cited and all_evidence_is_title_only
+                else []
+            )
+            if not title_only_scope:
+                continue
+            titles = [str(evidence.get("title") or "") for evidence in title_only_scope]
+            text = " ".join(item[field] for field in text_fields)
+            _assert_title_only_supported(text, titles, f"{collection}[{index}]")
+
     snapshot_numbers = _snapshot_numeric_tokens(evidence_lookup)
     for collection in ("facts", "sections"):
         for index, item in enumerate(cleaned[collection]):
@@ -519,8 +598,11 @@ def validate_research_result(
     if conflict_status == "possible":
         cleaned["confidence"] = "low"
         cleaned["impact_state"] = "insufficient"
-        if not any("冲突" in item for item in cleaned["unknowns"]):
-            cleaned["unknowns"].append("来源信息存在冲突，相关事实尚待进一步核验。")
+        cleaned["unknowns"] = [
+            item for item in cleaned["unknowns"]
+            if item != _CONFLICT_UNKNOWN and not _NO_CONFLICT_PATTERN.search(item)
+        ]
+        cleaned["unknowns"].append(_CONFLICT_UNKNOWN)
         notes.append("来源存在冲突，已将置信度降为 low 并标记信息不足")
     return cleaned, notes
 
@@ -529,15 +611,63 @@ def _sse(event_name: str, payload: dict) -> str:
     return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _adapt_legacy_stream_context(
+    asset: dict | None,
+    question: str | None,
+    event: dict | None,
+    evidence_items: list[dict] | None,
+    thesis: dict | None,
+    recent_messages: list[dict] | None,
+    snapshot: dict | None,
+) -> tuple[dict, str]:
+    """将 Task 5 之前的路由参数收敛为 Task 3 的有界上下文。"""
+    if not isinstance(asset, dict):
+        raise AIError("schema", "缺少研究标的上下文")
+    selected_evidence = list(evidence_items or [])
+    selected_event = deepcopy(event) if isinstance(event, dict) else None
+    if selected_event is not None:
+        selected_event["evidence"] = selected_evidence
+    context = select_research_context(
+        asset=asset,
+        question=str(question or ""),
+        snapshot=snapshot,
+        selected_event=selected_event,
+        daily_brief={},
+        evidence_items=selected_evidence,
+        thesis=thesis,
+        recent_messages=list(recent_messages or []),
+    )
+    if selected_event and selected_event.get("event_id"):
+        context.setdefault("selected_event", {})["event_id"] = selected_event["event_id"]
+    legacy_conflict_status = str((selected_event or {}).get("conflict_status") or "none")
+    return context, legacy_conflict_status
+
+
 def run_grounded_stream(
     config: VisitorAIConfig,
     mode: str,
-    context: dict,
-    conflict_status: str,
+    context: dict | None = None,
+    conflict_status: str | None = None,
+    *,
+    asset: dict | None = None,
+    question: str | None = None,
+    event: dict | None = None,
+    evidence_items: list[dict] | None = None,
+    thesis: dict | None = None,
+    recent_messages: list[dict] | None = None,
+    snapshot: dict | None = None,
 ) -> Generator[str, None, None]:
     """执行一次真实模型调用，按 SSE 状态推进，结束时产出 completed / failed 事件。"""
     prompt_mode = "event" if mode == "research" else mode
     instructions = compose_research_prompt(prompt_mode)
+    if context is None:
+        context, legacy_conflict_status = _adapt_legacy_stream_context(
+            asset, question, event, evidence_items, thesis, recent_messages, snapshot
+        )
+        if conflict_status is None:
+            conflict_status = legacy_conflict_status
+    if conflict_status is None:
+        conflict_status = "none"
     model_context = deepcopy(context)
     evidence_items = [
         item for item in model_context.get("evidence", [])

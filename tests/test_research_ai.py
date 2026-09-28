@@ -66,6 +66,22 @@ def selected_context(**overrides):
     return context
 
 
+def title_only_result(**overrides):
+    result = valid_result(
+        core_conclusion="标题显示公司签署合同，正文未提供，影响无法核验。",
+        key_tension="仅有标题信息，正文未提供。",
+        facts=[{"claim": "公司签署合同", "evidence_ids": ["e1"]}],
+        sections=[],
+        impact_paths=[],
+        inferences=[],
+        unknowns=["正文未提供，原因无法核验。"],
+        watch_signals=["等待后续公告。"],
+        thesis_relationship="证据不足，无法核验已确认判断。",
+    )
+    result.update(overrides)
+    return result
+
+
 def parsed_sse(stream):
     events = []
     for chunk in stream:
@@ -101,6 +117,53 @@ class ResearchAIValidationTest(unittest.TestCase):
 
         with self.assertRaises(AIError):
             validate_research_result(result, lookup, "none")
+
+    def test_title_only_safe_restatement_and_uncertainty_are_accepted(self):
+        lookup = {
+            "e1": sample_evidence(
+                title="公司签署合同", excerpt="", content_status="title_only"
+            )
+        }
+
+        cleaned, _ = validate_research_result(title_only_result(), lookup, "none")
+
+        self.assertEqual(cleaned["facts"][0]["claim"], "公司签署合同")
+
+    def test_title_only_rejects_invented_detail_in_every_evidence_derived_area(self):
+        lookup = {
+            "e1": sample_evidence(
+                title="公司签署合同", excerpt="", content_status="title_only"
+            )
+        }
+        cases = {
+            "core_conclusion": {"core_conclusion": "需求增长推动公司签署合同。"},
+            "key_tension": {"key_tension": "客户需求强劲，但产能待核验。"},
+            "sections": {
+                "sections": [{
+                    "heading": "原因", "body": "需求增长推动合同签署。", "evidence_ids": ["e1"]
+                }]
+            },
+            "facts": {
+                "facts": [{"claim": "公司因需求增长签署合同", "evidence_ids": ["e1"]}]
+            },
+            "impact_paths": {
+                "impact_paths": [{
+                    "path": "合同将提升利润", "evidence_ids": ["e1"], "uncertainty": "尚待核验"
+                }]
+            },
+            "inferences": {
+                "inferences": [{
+                    "claim": "需求增长带动合同", "evidence_ids": ["e1"], "uncertainty": "尚待核验"
+                }]
+            },
+            "unknowns": {"unknowns": ["客户需求是否持续增长尚不清楚。"]},
+            "watch_signals": {"watch_signals": ["客户需求增长。"]},
+            "thesis_relationship": {"thesis_relationship": "需求增长已验证原判断。"},
+        }
+
+        for label, override in cases.items():
+            with self.subTest(label=label), self.assertRaisesRegex(AIError, "仅标题"):
+                validate_research_result(title_only_result(**override), lookup, "none")
 
     def test_title_only_number_cannot_be_justified_by_coincidental_snapshot_value(self):
         lookup = {
@@ -208,6 +271,17 @@ class ResearchAIValidationTest(unittest.TestCase):
         self.assertTrue(any("冲突" in item for item in cleaned["unknowns"]))
         self.assertTrue(any("冲突" in item for item in notes))
 
+    def test_conflict_appends_normalized_unknown_even_after_false_no_conflict_text(self):
+        result = valid_result(confidence="high", unknowns=["未发现冲突。"])
+
+        cleaned, _ = validate_research_result(
+            result, {"e1": sample_evidence()}, "possible"
+        )
+
+        expected = "来源信息存在冲突，相关事实尚待进一步核验。"
+        self.assertEqual(cleaned["unknowns"].count(expected), 1)
+        self.assertNotIn("未发现冲突。", cleaned["unknowns"])
+
     def test_invalid_reference_is_rejected(self):
         result = valid_result(
             facts=[{"claim": "事实", "evidence_ids": ["missing"]}]
@@ -236,6 +310,32 @@ class ResearchAIValidationTest(unittest.TestCase):
         with self.assertRaises(AIError):
             validate_research_result(result, {"e1": sample_evidence()}, "none")
 
+    def test_common_hold_position_and_allocation_instructions_are_rejected(self):
+        instructions = (
+            "建议持有",
+            "可继续持有",
+            "耐心持有",
+            "坚定持有",
+            "控制仓位",
+            "调整仓位",
+            "维持仓位",
+            "仓位控制在半仓",
+            "逢低配置",
+            "逢低布局",
+            "分批建仓",
+            "分批配置",
+            "建议观望",
+            "建议暂避",
+        )
+
+        for instruction in instructions:
+            with self.subTest(instruction=instruction), self.assertRaises(AIError):
+                validate_research_result(
+                    valid_result(core_conclusion=instruction),
+                    {"e1": sample_evidence()},
+                    "none",
+                )
+
     def test_runtime_validation_rejects_extra_model_fields(self):
         result = valid_result(conclusion="旧字段不应由模型返回")
 
@@ -252,6 +352,48 @@ class ResearchAIValidationTest(unittest.TestCase):
 
 
 class ResearchAIStreamTest(unittest.TestCase):
+    def test_legacy_route_keywords_are_adapted_to_selected_context(self):
+        captured_contexts = []
+
+        def fake_model(config, instructions, context):
+            captured_contexts.append(deepcopy(context))
+            return valid_result()
+
+        with patch("app.services.ai._call_model", side_effect=fake_model), patch(
+            "app.services.ai.get_evidence", return_value=sample_evidence()
+        ):
+            events = parsed_sse(
+                run_grounded_stream(
+                    config=CONFIG,
+                    mode="research",
+                    asset={
+                        "stock_code": "600000",
+                        "stock_name": "浦发银行",
+                        "quantity": 100,
+                        "cost_price": 9.5,
+                    },
+                    question="这件事有什么影响？",
+                    event={
+                        "event_id": "e1",
+                        "title": "公司签署合同",
+                        "published_at": "2026-09-28T01:00:00+00:00",
+                        "source_type": "announcement",
+                    },
+                    evidence_items=[sample_evidence()],
+                    thesis=None,
+                    recent_messages=[],
+                    snapshot=None,
+                )
+            )
+
+        completed = [payload for name, payload in events if name == "completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["event_id"], "e1")
+        self.assertEqual(
+            captured_contexts[0]["asset"],
+            {"stock_code": "600000", "stock_name": "浦发银行"},
+        )
+
     def test_schema_parse_failure_from_provider_gets_one_repair_attempt(self):
         calls = []
 
