@@ -159,6 +159,23 @@ _TRADING_CLAUSE_SPLIT_PATTERN = re.compile(r"[。！？；，,:：;\n]+")
 _LEADING_CONNECTOR_PATTERN = re.compile(
     r"^(?:但|而|因此|所以|同时|不过|则|并且|并|且)\s*"
 )
+_NON_USER_POSITION_SUBJECT = r"(?:公司|企业|基金|监管|法规|银行|机构|股东)"
+_FACTUAL_POSITION_STATEMENT_PATTERN = re.compile(
+    rf"(?:^|[。！？；，,:：;])\s*(?:"
+    rf"{_NON_USER_POSITION_SUBJECT}"
+    r"(?:已将|将|已|正在|正|目前|曾|仍|可以|可|应当|应该|应|必须|需|需要|依法|按规定)?"
+    r"(?:的)?(?:持有|持仓|仓位)"
+    rf"|(?:监管(?:部门|机构)?|法规)[^。！？；，,:：;]{{0,8}}"
+    rf"{_NON_USER_POSITION_SUBJECT}[^。！？；，,:：;]{{0,4}}"
+    r"(?:持有|持仓|仓位)"
+    r")"
+)
+_USER_DIRECTED_TRADING_TERM_PATTERN = re.compile(
+    r"(?:你|您|投资者|用户|持有人|股民|交易者|我们|"
+    r"该股|本股|此股|股票|个股|该标的|本标的|标的|"
+    r"买入|卖出|回避|规避|暂避|观望|配置|布局|建仓|加仓|减仓|"
+    r"清仓|减持|参与|介入|止损|止盈|目标价|抄底|逃顶|低吸|高抛)"
+)
 
 _SNAPSHOT_NUMERIC_FIELDS = {
     "price", "prev_close", "open", "high", "low", "change_pct", "volume",
@@ -504,23 +521,43 @@ def _contains_trading_instruction(text: str) -> bool:
     return False
 
 
-def _trading_validation_strings(result: dict) -> Generator[str, None, None]:
-    """Yield only fields that can turn research output into user-facing advice."""
+def _trading_validation_strings(
+    result: dict,
+) -> Generator[tuple[str, list[str] | None], None, None]:
+    """Yield every user-visible research string and any factual evidence scope."""
     for field in (
         "core_conclusion", "key_tension", "thesis_relationship",
         "follow_up_question",
     ):
-        yield result[field]
-    yield from result["watch_signals"]
+        yield result[field], None
+    for text in result["unknowns"]:
+        yield text, None
+    for text in result["watch_signals"]:
+        yield text, None
+    for item in result["facts"]:
+        yield item["claim"], item["evidence_ids"]
     for item in result["impact_paths"]:
-        yield item["path"]
-        yield item["uncertainty"]
+        yield item["path"], None
+        yield item["uncertainty"], None
     for item in result["inferences"]:
-        yield item["claim"]
+        yield item["claim"], None
+        yield item["uncertainty"], None
     for section in result["sections"]:
-        if not section["evidence_ids"]:
-            yield section["heading"]
-            yield section["body"]
+        yield section["heading"], section["evidence_ids"]
+        yield section["body"], section["evidence_ids"]
+
+
+def _is_evidence_backed_factual_position_statement(
+    text: str,
+    evidence_ids: list[str] | None,
+) -> bool:
+    if not evidence_ids or _USER_DIRECTED_TRADING_TERM_PATTERN.search(text):
+        return False
+    factual_match = _FACTUAL_POSITION_STATEMENT_PATTERN.search(text)
+    if not factual_match:
+        return False
+    remainder = text[:factual_match.start()] + text[factual_match.end():]
+    return not _contains_trading_instruction(remainder)
 
 
 def validate_research_result(
@@ -656,10 +693,11 @@ def validate_research_result(
                     f"{collection}[{index}]包含证据或行情快照未支持的数字 {unsupported[0]}",
                 )
 
-    if any(
-        _contains_trading_instruction(text)
-        for text in _trading_validation_strings(cleaned)
-    ):
+    for text, evidence_ids in _trading_validation_strings(cleaned):
+        if not _contains_trading_instruction(text):
+            continue
+        if _is_evidence_backed_factual_position_statement(text, evidence_ids):
+            continue
         raise AIError("schema", "模型输出包含交易指令")
 
     notes: list[str] = []

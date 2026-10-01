@@ -407,7 +407,7 @@ class ResearchAIValidationTest(unittest.TestCase):
             "基金必须持有百分之五的现金。",
             "监管建议银行持有充足资本。",
             "法规要求基金持仓不低于八成。",
-            "公司将仓位降至半仓后披露了该事项。",
+            "公司将仓位降至半仓。",
         )
 
         for statement in factual_statements:
@@ -433,6 +433,33 @@ class ResearchAIValidationTest(unittest.TestCase):
                     {"e1": sample_evidence()},
                     "none",
                 )
+
+    def test_cited_direct_advice_is_rejected_in_every_visible_container(self):
+        cases = {
+            "fact": valid_result(facts=[{
+                "claim": "建议买入并持有",
+                "evidence_ids": ["e1"],
+            }]),
+            "fact_with_non_user_subject": valid_result(facts=[{
+                "claim": "公司将仓位降至半仓后不妨持有",
+                "evidence_ids": ["e1"],
+            }]),
+            "section": valid_result(sections=[{
+                "heading": "操作建议",
+                "body": "建议买入并持有",
+                "evidence_ids": ["e1"],
+            }]),
+            "unknown": valid_result(unknowns=["信息有限，但建议买入并持有"]),
+            "inference_uncertainty": valid_result(inferences=[{
+                "claim": "影响尚待确认",
+                "evidence_ids": ["e1"],
+                "uncertainty": "不确定时建议买入并持有",
+            }]),
+        }
+
+        for label, result in cases.items():
+            with self.subTest(label=label), self.assertRaises(AIError):
+                validate_research_result(result, {"e1": sample_evidence()}, "none")
 
     def test_evidence_backed_factual_section_is_not_scanned_as_advice(self):
         section = {
