@@ -1,5 +1,9 @@
 import { api, streamPost } from "./api.js?v=20260920-zhipu-model-defaults";
-import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
+import {
+  bindImportanceChart,
+  createImportanceViewport,
+  renderImportanceChart,
+} from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
 import { publicDynamicDetailSheet, publicDynamicsSheet } from "./public-dynamics.js";
 import { bindResearchBrief, renderResearchBrief } from "./research-brief.js";
@@ -55,6 +59,7 @@ const state = {
   archiveTab: "thesis",
   chartPeriod: "day",
   importanceRows: [],
+  importanceViewport: createImportanceViewport(0),
   importanceDays: 90,
   importanceError: "",
   researchBrief: null,
@@ -408,7 +413,7 @@ function renderConversation() {
   if (state.pending) {
     const pendingLabel = state.pending.type === "research" ? "正在核验事件与研究判断" : "正在回答当前问题";
     els.conversation.innerHTML = renderContextLine(asset, state.overview?.events?.[0])
-      + renderImportanceChart(state.importanceRows, { escapeHtml })
+      + renderImportanceChart(state.importanceRows, { escapeHtml, viewport: state.importanceViewport })
       + renderResearchBriefMessage(asset, state.researchBrief)
       + (state.pending.question ? `<article class="message user"><div class="user-message">${escapeHtml(state.pending.question)}</div></article>` : "")
       + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`;
@@ -420,7 +425,7 @@ function renderConversation() {
   if (event) state.selectedEventId = event.event_id;
   const messages = aiEnabled() ? state.localMessages : [];
   els.conversation.innerHTML = renderContextLine(asset, event)
-    + renderImportanceChart(state.importanceRows, { escapeHtml })
+    + renderImportanceChart(state.importanceRows, { escapeHtml, viewport: state.importanceViewport })
     + renderResearchBriefMessage(asset, state.researchBrief)
     + messages.map(renderMessage).join("");
   bindImportance();
@@ -433,8 +438,14 @@ function bindImportance() {
   const overviewLoadSequence = state.overviewLoadSequence;
   bindImportanceChart(chart, {
     rows: state.importanceRows,
+    viewport: state.importanceViewport,
     escapeHtml,
     onOpen: (date, trigger) => openSheet("importanceDay", trigger, { date }),
+    onViewport: (viewport, action) => {
+      if (state.assetId !== assetId || state.overviewLoadSequence !== overviewLoadSequence) return;
+      state.importanceViewport = viewport;
+      renderConversation();
+    },
     onRange: async (days) => {
       if (days === state.importanceDays) return;
       state.importanceDays = days;
@@ -446,6 +457,7 @@ function bindImportance() {
           || state.overviewLoadSequence !== overviewLoadSequence
           || state.importanceRequestSequence !== importanceRequestSequence) return;
         state.importanceRows = payload.rows || [];
+        state.importanceViewport = createImportanceViewport(state.importanceRows.length, days);
         renderConversation();
       } catch (error) {
         if (state.assetId === assetId
@@ -1191,6 +1203,7 @@ function aiErrorMessage(data) {
 
 function resetResearchBriefState() {
   state.importanceRows = [];
+  state.importanceViewport = createImportanceViewport(0);
   state.importanceError = "";
   state.importanceRequestSequence += 1;
   state.researchBrief = null;
@@ -1446,6 +1459,7 @@ async function loadOverview(assetId) {
   state.selectedEventId = null;
   state.analysis = null;
   state.importanceRows = [];
+  state.importanceViewport = createImportanceViewport(0);
   state.importanceError = "";
   state.researchBrief = null;
   state.researchBriefLoading = true;
@@ -1481,6 +1495,7 @@ async function loadOverview(assetId) {
     state.overview = overview;
     if (state.importanceRequestSequence === importanceRequestSequence) {
       state.importanceRows = importance.rows || [];
+      state.importanceViewport = createImportanceViewport(state.importanceRows.length);
       state.importanceError = importance.error || "";
     }
     state.researchBrief = briefResult.brief;

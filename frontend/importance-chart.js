@@ -126,16 +126,14 @@ export function renderImportanceChart(rows, { escapeHtml, viewport } = {}) {
     row,
     index: startIndex + offset,
     offset,
-  }));
+  })).filter(({ index }) => {
+    const center = index + 0.5;
+    return center >= current.start && center <= current.end;
+  });
   const span = Math.max(current.end - current.start, 1);
-  // Viewport edges describe the first and last visible data points, while `end`
-  // remains exclusive for slicing and viewport transforms.
-  const pointSpan = Math.max(span - 1, 1);
-  const xAt = (index) => clamp(
-    CHART_LEFT + ((index - current.start) / pointSpan) * CHART_WIDTH,
-    CHART_LEFT,
-    CHART_RIGHT,
-  );
+  // Rows are unit-width bins. Their centers are mapped against the fractional
+  // viewport boundaries, so edge rows remain inside without hiding an overflow.
+  const xAt = (index) => CHART_LEFT + (((index + 0.5) - current.start) / span) * CHART_WIDTH;
   const yAt = (score) => 190 - Number(score) * 1.5;
   const radius = clamp(
     6 - ((span - MIN_IMPORTANCE_ROWS) / (MAX_IMPORTANCE_ROWS - MIN_IMPORTANCE_ROWS)) * 3,

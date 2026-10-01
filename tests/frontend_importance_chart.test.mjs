@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import {
   createImportanceViewport,
   bindImportanceChart,
@@ -8,6 +11,11 @@ import {
   visibleImportanceRows,
   zoomImportanceViewport,
 } from "../frontend/importance-chart.js";
+
+const appSource = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../frontend/app.js"),
+  "utf8",
+);
 
 const sampleRow = (index) => ({
   date: `2026-06-${String(index + 1).padStart(2, "0")}`,
@@ -26,6 +34,21 @@ test("zoom keeps the pointer anchor stable", () => {
   const zoomed = zoomImportanceViewport(createImportanceViewport(90), 0.5, 0.25);
   assert.equal(zoomed.end - zoomed.start, 15);
   assert.ok(Math.abs((zoomed.start + 0.25 * 15) - (60 + 0.25 * 30)) < 1);
+});
+
+test("rendered anchor keeps the same x position after zoom", () => {
+  const rows = Array.from({ length: 90 }, (_, index) => sampleRow(index));
+  const initial = renderImportanceChart(rows, {
+    escapeHtml: String,
+    viewport: createImportanceViewport(90),
+  });
+  const zoomed = renderImportanceChart(rows, {
+    escapeHtml: String,
+    viewport: zoomImportanceViewport(createImportanceViewport(90), 0.5, 0.25),
+  });
+  const circles = (html) => [...html.matchAll(/<circle[^>]*\bcx="([^\"]+)"/g)]
+    .map((match) => Number(match[1]));
+  assert.ok(Math.abs(circles(initial)[7] - circles(zoomed)[3]) < 0.001);
 });
 
 test("pan clamps to loaded bounds", () => {
@@ -97,4 +120,11 @@ test("chart controls report viewport changes through the binder", () => {
   assert.equal(changes[0].action, "zoom-in");
   assert.equal(changes[0].next.end - changes[0].next.start, 15);
   assert.deepEqual(changes[1].next, viewport);
+});
+
+test("production app owns and passes the importance viewport", () => {
+  assert.match(appSource, /importanceViewport/);
+  assert.match(appSource, /renderImportanceChart\(state\.importanceRows, \{ escapeHtml, viewport: state\.importanceViewport \}\)/);
+  assert.match(appSource, /onViewport:\s*\(viewport, action\) =>/);
+  assert.match(appSource, /state\.importanceViewport\s*=\s*viewport/);
 });
