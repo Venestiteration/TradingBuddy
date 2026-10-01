@@ -83,8 +83,12 @@ test("public dynamics drilldown preserves the conversation shell and analysis co
 
 test("overview loads the deterministic brief independently and resets cluster state on asset change", () => {
   assert.match(app, /research-brief\?hours=24/);
-  assert.match(app, /importance\?days=\$\{state\.importanceDays\}/);
-  assert.match(app, /importanceDays:\s*90/);
+  assert.match(app, /importance\?days=90/);
+  assert.match(app, /importanceViewport:\s*null/);
+  assert.match(app, /onBoundary:\s*\(edge\) =>/);
+  assert.doesNotMatch(app, /importanceDays/);
+  assert.doesNotMatch(app, /onRange/);
+  assert.doesNotMatch(app, /data-importance-days/);
   assert.match(app, /overviewLoadSequence/);
   assert.match(app, /function resetResearchBriefState\(\) \{\s*state\.importanceRows = \[\];/);
   assert.match(app, /state\.researchEventDetails = \{\}/);

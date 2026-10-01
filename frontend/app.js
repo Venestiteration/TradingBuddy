@@ -44,7 +44,6 @@ const state = {
   assetId: null,
   viewGeneration: 0,
   overviewLoadSequence: 0,
-  importanceRequestSequence: 0,
   overview: null,
   selectedEventId: null,
   analysis: null,
@@ -59,9 +58,8 @@ const state = {
   archiveTab: "thesis",
   chartPeriod: "day",
   importanceRows: [],
-  importanceViewport: createImportanceViewport(0),
+  importanceViewport: null,
   importanceChartCleanup: null,
-  importanceDays: 90,
   importanceError: "",
   researchBrief: null,
   researchBriefLoading: false,
@@ -296,6 +294,7 @@ function renderAssetPopover() {
 }
 
 function renderEmptyState() {
+  cleanupImportanceChart();
   els.assetSwitcherLabel.textContent = "添加一个标的开始";
   els.conversation.innerHTML = `
     <article class="message assistant empty-state" data-tour="thesis">
@@ -454,27 +453,9 @@ function bindImportance() {
       state.importanceViewport = viewport;
       renderConversation();
     },
-    onRange: async (days) => {
-      if (days === state.importanceDays) return;
-      state.importanceDays = days;
-      const importanceRequestSequence = state.importanceRequestSequence + 1;
-      state.importanceRequestSequence = importanceRequestSequence;
-      try {
-        const payload = await api(`/assets/${assetId}/importance?days=${days}`);
-        if (state.assetId !== assetId
-          || state.overviewLoadSequence !== overviewLoadSequence
-          || state.importanceRequestSequence !== importanceRequestSequence) return;
-        state.importanceRows = payload.rows || [];
-        state.importanceViewport = createImportanceViewport(state.importanceRows.length, days);
-        renderConversation();
-      } catch (error) {
-        if (state.assetId === assetId
-          && state.overviewLoadSequence === overviewLoadSequence
-          && state.importanceRequestSequence === importanceRequestSequence) {
-          showToast(error.message, "error");
-        }
-      }
-    },
+    onBoundary: (edge) => showToast(
+      edge === "start" ? "已到达已加载的最早数据" : "已到达已加载的最新数据",
+    ),
   });
 }
 
@@ -1211,9 +1192,8 @@ function aiErrorMessage(data) {
 
 function resetResearchBriefState() {
   state.importanceRows = [];
-  state.importanceViewport = createImportanceViewport(0);
+  state.importanceViewport = null;
   state.importanceError = "";
-  state.importanceRequestSequence += 1;
   state.researchBrief = null;
   state.researchBriefLoading = true;
   state.researchBriefError = "";
@@ -1461,14 +1441,15 @@ async function loadOverview(assetId) {
   const isCurrentLoad = () => isCurrentView(state, view)
     && state.overviewLoadSequence === overviewLoadSequence;
   if (!isCurrentLoad()) return;
-  const importanceRequestSequence = state.importanceRequestSequence + 1;
-  state.importanceRequestSequence = importanceRequestSequence;
+  const assetChanged = state.assetId !== requestAssetId;
   state.assetId = requestAssetId;
   state.overview = null;
   state.selectedEventId = null;
   state.analysis = null;
-  state.importanceRows = [];
-  state.importanceViewport = createImportanceViewport(0);
+  if (assetChanged) {
+    state.importanceRows = [];
+    state.importanceViewport = null;
+  }
   state.importanceError = "";
   state.researchBrief = null;
   state.researchBriefLoading = true;
@@ -1485,7 +1466,7 @@ async function loadOverview(assetId) {
   try {
     const overviewRequest = api(`/assets/${requestAssetId}/overview`);
     const thesesRequest = api(`/assets/${requestAssetId}/theses`).catch(() => ({ history: [] }));
-    const importanceRequest = api(`/assets/${requestAssetId}/importance?days=${state.importanceDays}`)
+    const importanceRequest = api(`/assets/${requestAssetId}/importance?days=90`)
       .catch((error) => ({ rows: [], error: error.message }));
     const briefRequest = api(`/assets/${requestAssetId}/research-brief?hours=24`)
       .then((brief) => ({ brief, error: "" }))
@@ -1502,11 +1483,19 @@ async function loadOverview(assetId) {
     if (!isCurrentLoad()) return;
     overview.thesis_history = theses.history || [];
     state.overview = overview;
-    if (state.importanceRequestSequence === importanceRequestSequence) {
-      state.importanceRows = importance.rows || [];
-      state.importanceViewport = createImportanceViewport(state.importanceRows.length);
-      state.importanceError = importance.error || "";
-    }
+    const nextImportanceRows = importance.rows || [];
+    const previousImportanceRows = state.importanceRows;
+    const previousImportanceViewport = state.importanceViewport;
+    const importanceDomainChanged = previousImportanceRows.length !== nextImportanceRows.length
+      || previousImportanceRows[0]?.date !== nextImportanceRows[0]?.date
+      || previousImportanceRows.at(-1)?.date !== nextImportanceRows.at(-1)?.date;
+    state.importanceRows = nextImportanceRows;
+    state.importanceViewport = !importance.error
+      && previousImportanceViewport
+      && !importanceDomainChanged
+      ? previousImportanceViewport
+      : createImportanceViewport(nextImportanceRows.length);
+    state.importanceError = importance.error || "";
     state.researchBrief = briefResult.brief;
     state.researchBriefLoading = false;
     state.researchBriefError = briefResult.error || "";
