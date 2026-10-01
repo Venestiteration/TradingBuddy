@@ -122,6 +122,133 @@ test("chart controls report viewport changes through the binder", () => {
   assert.deepEqual(changes[1].next, viewport);
 });
 
+function interactionContainer() {
+  const listeners = new Map();
+  const removed = [];
+  const surface = {
+    getBoundingClientRect: () => ({ left: 100, top: 0, width: 700, height: 230 }),
+    classList: { add() {}, remove() {} },
+  };
+  return {
+    listeners,
+    removed,
+    surface,
+    querySelector: (selector) => selector === ".importance-chart-wrap" ? surface : null,
+    addEventListener: (name, handler) => listeners.set(name, handler),
+    removeEventListener: (name, handler) => removed.push([name, handler]),
+  };
+}
+
+test("chart registers wheel and pointer interaction listeners and anchors wheel zoom to clientX", () => {
+  const container = interactionContainer();
+  const changes = [];
+  bindImportanceChart(container, {
+    rows: Array.from({ length: 90 }, (_, index) => sampleRow(index)),
+    viewport: createImportanceViewport(90),
+    onViewport: (next, action) => changes.push({ next, action }),
+    onBoundary: () => {},
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  for (const eventName of ["wheel", "pointerdown", "pointermove", "pointerup", "keydown"]) {
+    assert.equal(typeof container.listeners.get(eventName), "function", eventName);
+  }
+  let prevented = false;
+  container.listeners.get("wheel")({
+    clientX: 275,
+    deltaY: -100,
+    deltaX: 0,
+    ctrlKey: true,
+    metaKey: false,
+    preventDefault: () => { prevented = true; },
+  });
+  assert.equal(prevented, true);
+  assert.equal(changes.at(-1).action, "wheel-zoom");
+  const expectedAnchor = (275 - 100) / 700;
+  const next = changes.at(-1).next;
+  assert.ok(Math.abs((next.start + expectedAnchor * (next.end - next.start)) - (60 + 0.25 * 30)) < 1);
+});
+
+test("ordinary vertical wheel preserves page scrolling while horizontal intent pans", () => {
+  const container = interactionContainer();
+  const changes = [];
+  bindImportanceChart(container, {
+    rows: Array.from({ length: 90 }, (_, index) => sampleRow(index)),
+    viewport: createImportanceViewport(90),
+    onViewport: (next, action) => changes.push({ next, action }),
+    onBoundary: () => {},
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  let ordinaryPrevented = false;
+  container.listeners.get("wheel")({ deltaX: 0, deltaY: 80, ctrlKey: false, metaKey: false, preventDefault: () => { ordinaryPrevented = true; } });
+  assert.equal(ordinaryPrevented, false);
+  assert.equal(changes.length, 0);
+  let horizontalPrevented = false;
+  container.listeners.get("wheel")({
+    clientX: 450,
+    deltaX: 80,
+    deltaY: 10,
+    ctrlKey: false,
+    metaKey: false,
+    preventDefault: () => { horizontalPrevented = true; },
+  });
+  assert.equal(horizontalPrevented, true);
+  assert.equal(changes.at(-1).action, "wheel-pan");
+  assert.ok(changes.at(-1).next.start < 60);
+});
+
+test("two pointers pinch around their midpoint and cleanup removes every listener", () => {
+  const container = interactionContainer();
+  const changes = [];
+  const cleanup = bindImportanceChart(container, {
+    rows: Array.from({ length: 90 }, (_, index) => sampleRow(index)),
+    viewport: createImportanceViewport(90),
+    onViewport: (next, action) => changes.push({ next, action }),
+    onBoundary: () => {},
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  const pointer = (id, clientX, clientY) => ({
+    pointerId: id,
+    pointerType: "touch",
+    isPrimary: id === 1,
+    button: 0,
+    clientX,
+    clientY,
+    target: { setPointerCapture() {}, releasePointerCapture() {} },
+    preventDefault() {},
+  });
+  container.listeners.get("pointerdown")(pointer(1, 200, 80));
+  container.listeners.get("pointerdown")(pointer(2, 400, 80));
+  container.listeners.get("pointermove")(pointer(2, 500, 80));
+  assert.equal(changes.at(-1).action, "pinch-zoom");
+  assert.ok(changes.at(-1).next.end - changes.at(-1).next.start < 30);
+  container.listeners.get("pointerup")(pointer(1, 200, 80));
+  cleanup();
+  assert.ok(container.removed.length >= container.listeners.size);
+});
+
+test("keyboard shortcuts use viewport transforms and report loaded boundaries", () => {
+  const container = interactionContainer();
+  const changes = [];
+  const boundaries = [];
+  bindImportanceChart(container, {
+    rows: Array.from({ length: 90 }, (_, index) => sampleRow(index)),
+    viewport: { start: 0, end: 30, minVisible: 7, total: 90 },
+    onViewport: (next, action) => changes.push({ next, action }),
+    onBoundary: (edge) => boundaries.push(edge),
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  const key = (key) => container.listeners.get("keydown")({ key, preventDefault() {} });
+  key("ArrowLeft");
+  key("+");
+  key("Home");
+  assert.deepEqual(changes.map(({ action }) => action), ["zoom-in", "reset"]);
+  assert.deepEqual(boundaries, ["start"]);
+});
+
 test("production app owns and passes the importance viewport", () => {
   assert.match(appSource, /importanceViewport/);
   assert.match(appSource, /renderImportanceChart\(state\.importanceRows, \{ escapeHtml, viewport: state\.importanceViewport \}\)/);

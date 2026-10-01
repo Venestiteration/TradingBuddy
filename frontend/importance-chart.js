@@ -181,11 +181,11 @@ export function renderImportanceChart(rows, { escapeHtml, viewport } = {}) {
       </div>
       <div class="importance-legend">${Object.entries(LABELS).map(([key, label]) =>
         `<span><i style="background:${COLORS[key]}"></i>${label}</span>`).join("")}</div></div>
-    <div class="importance-chart-wrap"><svg viewBox="0 0 760 230" role="img" aria-label="${encode(chartLabel)}">
+    <div class="importance-chart-wrap"><svg viewBox="0 0 760 230" role="img" tabindex="0" aria-label="${encode(chartLabel)}">
       <line class="importance-grid" x1="42" y1="40" x2="732" y2="40" />
       <line class="importance-grid" x1="42" y1="115" x2="732" y2="115" />
       <line class="importance-grid" x1="42" y1="190" x2="732" y2="190" />
-      ${paths}${nodes}${dateLabels}</svg><div class="importance-tooltip" hidden></div></div>
+      ${paths}${nodes}${dateLabels}</svg><div class="importance-tooltip" hidden></div><div class="importance-live-region" aria-live="polite" aria-atomic="true"></div></div>
   </section>`;
 }
 
@@ -193,72 +193,269 @@ export function bindImportanceChart(
   container,
   { rows, viewport, onOpen, onRange, onViewport, onBoundary, escapeHtml },
 ) {
+  rows = Array.isArray(rows) ? rows : [];
   const tooltip = container.querySelector(".importance-tooltip");
-  let currentViewport = viewport || createImportanceViewport(rows.length);
+  const plotSurface = container.querySelector(".importance-chart-wrap") || container;
+  const liveRegion = container.querySelector(".importance-live-region");
+  const viewportTotal = rows.length || viewport?.total || 0;
+  let currentViewport = normalizedViewport(viewport || createImportanceViewport(viewportTotal), viewportTotal);
+  const activePointers = new Map();
+  let primaryPointerId = null;
+  let dragging = false;
+  let dragLastX = 0;
+  let pinchStartDistance = 0;
+  let pinchStartMidpoint = null;
+  let pinchStartViewport = null;
+
+  const plotRect = () => {
+    const rect = plotSurface?.getBoundingClientRect?.();
+    return {
+      left: finiteNumber(rect?.left, 0),
+      top: finiteNumber(rect?.top, 0),
+      width: Math.max(1, finiteNumber(rect?.width, CHART_WIDTH)),
+      height: Math.max(1, finiteNumber(rect?.height, 230)),
+    };
+  };
+  const sameViewport = (left, right) => left.start === right.start
+    && left.end === right.end && left.total === right.total;
+  const announce = () => {
+    if (!liveRegion || !rows.length) return;
+    const visible = visibleImportanceRows(rows, currentViewport);
+    const first = visible[0]?.date || rows[0].date;
+    const last = visible.at(-1)?.date || rows.at(-1).date;
+    liveRegion.textContent = `显示 ${first} 至 ${last}，已加载 ${rows[0].date} 至 ${rows.at(-1).date}`;
+  };
+  const setDragging = (value) => {
+    dragging = value;
+    plotSurface?.classList?.toggle?.("is-dragging", value);
+  };
+  const boundaryDirection = (start, end) => {
+    if (start < 0) return "start";
+    if (end > currentViewport.total) return "end";
+    return null;
+  };
+  const publish = (nextViewport, action, boundary = null) => {
+    const previous = currentViewport;
+    currentViewport = nextViewport;
+    announce();
+    if (!sameViewport(nextViewport, previous) || action === "reset") onViewport?.(nextViewport, action);
+    if (boundary) onBoundary?.(boundary);
+  };
+  const applyZoom = (scale, anchorRatio, action, baseViewport = currentViewport) => {
+    const current = baseViewport;
+    const span = current.end - current.start;
+    const ratio = clamp(finiteNumber(anchorRatio, 0.5), 0, 1);
+    const nextSpan = clamp(span * Math.max(0.01, finiteNumber(scale, 1)), current.minVisible, current.total);
+    const anchor = current.start + ratio * span;
+    const rawStart = anchor - ratio * nextSpan;
+    const rawEnd = rawStart + nextSpan;
+    const next = zoomImportanceViewport(current, scale, ratio);
+    publish(next, action, boundaryDirection(rawStart, rawEnd));
+  };
+  const applyPan = (deltaRows, action) => {
+    const current = currentViewport;
+    const span = current.end - current.start;
+    const rawStart = current.start + finiteNumber(deltaRows, 0);
+    const next = panImportanceViewport(current, deltaRows);
+    publish(next, action, boundaryDirection(rawStart, rawStart + span));
+  };
+  const action = (name) => {
+    if (name === "zoom-in") applyZoom(0.5, 0.5, name);
+    else if (name === "zoom-out") applyZoom(2, 0.5, name);
+    else if (name === "reset") publish(createImportanceViewport(currentViewport.total), name);
+  };
   const show = (node) => {
     const row = rows.find((item) => item.date === node.dataset.importanceDay);
     if (!row || !tooltip) return;
-    tooltip.innerHTML = `<strong>${escapeHtml(row.date)} · ${Math.round(row.composite_score)}</strong>
-      <span>${escapeHtml(row.summary || "暂无新信息")}</span>
+    const encode = typeof escapeHtml === "function" ? escapeHtml : String;
+    tooltip.innerHTML = `<strong>${encode(row.date)} · ${Math.round(row.composite_score)}</strong>
+      <span>${encode(row.summary || "暂无新信息")}</span>
       <small>${Object.entries(row.category_scores || {}).map(([key, value]) =>
         `${LABELS[key]} ${Math.round(value)}`).join(" · ")}</small>`;
     tooltip.hidden = false;
   };
   const hide = () => { if (tooltip) tooltip.hidden = true; };
-  const sameViewport = (left, right) => left.start === right.start
-    && left.end === right.end && left.total === right.total;
-  const chartAction = (action) => {
-    const previousViewport = currentViewport;
-    let nextViewport;
-    if (action === "zoom-in") {
-      nextViewport = zoomImportanceViewport(currentViewport, 0.5, 0.5);
-    } else if (action === "zoom-out") {
-      nextViewport = zoomImportanceViewport(currentViewport, 2, 0.5);
-    } else if (action === "reset") {
-      nextViewport = createImportanceViewport(currentViewport.total);
-    }
-    if (!nextViewport) return;
-    currentViewport = nextViewport;
-    if (action === "reset" || !sameViewport(nextViewport, previousViewport)) {
-      onViewport?.(nextViewport, action);
-    } else {
-      onBoundary?.(action, nextViewport);
-    }
-  };
   const click = (event) => {
-    const action = event.target.closest("[data-chart-action]");
-    if (action) {
-      chartAction(action.dataset.chartAction);
+    const target = event.target;
+    const chartAction = target?.closest?.("[data-chart-action]");
+    if (chartAction) {
+      action(chartAction.dataset.chartAction);
       return;
     }
-    const range = event.target.closest("[data-importance-days]");
-    if (range) {
+    const range = target?.closest?.("[data-importance-days]");
+    if (range && onRange) {
       onRange(Number(range.dataset.importanceDays));
       return;
     }
-    const node = event.target.closest("[data-importance-day]");
+    const node = target?.closest?.("[data-importance-day]");
     if (node) onOpen(node.dataset.importanceDay, node);
   };
   const keydown = (event) => {
-    if ((event.key === "Enter" || event.key === " ") && event.target.matches("[data-importance-day]")) {
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault?.();
+      action("zoom-in");
+      return;
+    }
+    if (event.key === "-") {
+      event.preventDefault?.();
+      action("zoom-out");
+      return;
+    }
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      event.preventDefault?.();
+      const span = currentViewport.end - currentViewport.start;
+      const amount = Math.max(1, span * 0.8) * (event.key === "ArrowLeft" ? -1 : 1);
+      applyPan(amount, event.key === "ArrowLeft" ? "pan-left" : "pan-right");
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault?.();
+      action("reset");
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && event.target?.matches?.("[data-importance-day]")) {
       event.preventDefault();
       onOpen(event.target.dataset.importanceDay, event.target);
     }
   };
-  container.addEventListener("mouseover", (event) => {
-    const node = event.target.closest("[data-importance-day]");
+  const mouseover = (event) => {
+    const node = event.target?.closest?.("[data-importance-day]");
     if (node) show(node);
-  });
-  container.addEventListener("focusin", (event) => {
-    const node = event.target.closest("[data-importance-day]");
+  };
+  const focusin = (event) => {
+    const node = event.target?.closest?.("[data-importance-day]");
     if (node) show(node);
-  });
-  container.addEventListener("mouseleave", hide);
-  container.addEventListener("focusout", hide);
+  };
+  const focusout = () => hide();
+  const mouseleave = () => hide();
+
+  const pointerPosition = (event) => ({ x: finiteNumber(event.clientX, 0), y: finiteNumber(event.clientY, 0) });
+  const pointerCapture = (event, method) => {
+    const target = event.target || plotSurface;
+    if (typeof target?.[method] === "function") target[method](event.pointerId);
+    else if (typeof event.currentTarget?.[method] === "function") event.currentTarget[method](event.pointerId);
+    else if (typeof plotSurface?.[method] === "function") plotSurface[method](event.pointerId);
+  };
+  const distanceAndMidpoint = () => {
+    const points = [...activePointers.values()];
+    if (points.length < 2) return null;
+    const [first, second] = points;
+    return {
+      distance: Math.hypot(second.x - first.x, second.y - first.y),
+      midpoint: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 },
+    };
+  };
+  const beginPinch = () => {
+    const measure = distanceAndMidpoint();
+    if (!measure || measure.distance <= 0) return;
+    pinchStartDistance = measure.distance;
+    pinchStartMidpoint = measure.midpoint;
+    pinchStartViewport = currentViewport;
+  };
+  const pointerdown = (event) => {
+    if (event.pointerId == null) return;
+    const point = pointerPosition(event);
+    activePointers.set(event.pointerId, { ...point, startX: point.x, startY: point.y });
+    pointerCapture(event, "setPointerCapture");
+    if (activePointers.size === 1 && (event.isPrimary !== false) && (event.button == null || event.button === 0)) {
+      primaryPointerId = event.pointerId;
+      dragLastX = point.x;
+    }
+    if (activePointers.size === 2) {
+      beginPinch();
+      setDragging(true);
+    }
+  };
+  const pointermove = (event) => {
+    const pointer = activePointers.get(event.pointerId);
+    if (!pointer) return;
+    const point = pointerPosition(event);
+    pointer.x = point.x;
+    pointer.y = point.y;
+    if (activePointers.size >= 2 && pinchStartDistance > 0 && pinchStartViewport) {
+      const measure = distanceAndMidpoint();
+      if (!measure || measure.distance <= 0) return;
+      const rect = plotRect();
+      const anchorRatio = clamp((measure.midpoint.x - rect.left) / rect.width, 0, 1);
+      applyZoom(pinchStartDistance / measure.distance, anchorRatio, "pinch-zoom", pinchStartViewport);
+      event.preventDefault?.();
+      return;
+    }
+    if (activePointers.size !== 1 || event.pointerId !== primaryPointerId) return;
+    const distance = Math.hypot(point.x - pointer.startX, point.y - pointer.startY);
+    if (!dragging) {
+      if (distance <= 4) return;
+      setDragging(true);
+      dragLastX = point.x;
+    }
+    const rect = plotRect();
+    const span = currentViewport.end - currentViewport.start;
+    const deltaX = point.x - dragLastX;
+    dragLastX = point.x;
+    if (deltaX) applyPan(-deltaX * span / rect.width, "drag-pan");
+    event.preventDefault?.();
+  };
+  const pointerend = (event) => {
+    if (event.pointerId == null) return;
+    activePointers.delete(event.pointerId);
+    pointerCapture(event, "releasePointerCapture");
+    if (activePointers.size < 2) {
+      pinchStartDistance = 0;
+      pinchStartMidpoint = null;
+      pinchStartViewport = null;
+    }
+    if (!activePointers.size) {
+      primaryPointerId = null;
+      setDragging(false);
+    }
+  };
+  announce();
+  container.addEventListener("mouseover", mouseover);
+  container.addEventListener("focusin", focusin);
+  container.addEventListener("mouseleave", mouseleave);
+  container.addEventListener("focusout", focusout);
   container.addEventListener("click", click);
   container.addEventListener("keydown", keydown);
+  const wheel = (event) => {
+    const rect = plotRect();
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
+    const deltaX = finiteNumber(event.deltaX, 0) * unit;
+    const deltaY = finiteNumber(event.deltaY, 0) * unit;
+    const horizontal = Math.abs(deltaX) > Math.abs(deltaY) && deltaX !== 0;
+    if (event.ctrlKey || event.metaKey) {
+      const anchorRatio = clamp((finiteNumber(event.clientX, rect.left + rect.width / 2) - rect.left) / rect.width, 0, 1);
+      applyZoom(Math.exp(deltaY * 0.002), anchorRatio, "wheel-zoom");
+      event.preventDefault?.();
+    } else if (horizontal || event.shiftKey) {
+      const horizontalDelta = horizontal ? deltaX : deltaY;
+      applyPan(-horizontalDelta * (currentViewport.end - currentViewport.start) / rect.width, "wheel-pan");
+      event.preventDefault?.();
+    }
+  };
+  container.addEventListener("wheel", wheel);
+  container.addEventListener("pointerdown", pointerdown);
+  container.addEventListener("pointermove", pointermove);
+  container.addEventListener("pointerup", pointerend);
+  container.addEventListener("pointercancel", pointerend);
+  container.addEventListener("lostpointercapture", pointerend);
   return () => {
+    activePointers.clear();
+    primaryPointerId = null;
+    pinchStartDistance = 0;
+    pinchStartMidpoint = null;
+    pinchStartViewport = null;
+    setDragging(false);
+    container.removeEventListener("mouseover", mouseover);
+    container.removeEventListener("focusin", focusin);
+    container.removeEventListener("mouseleave", mouseleave);
+    container.removeEventListener("focusout", focusout);
     container.removeEventListener("click", click);
     container.removeEventListener("keydown", keydown);
+    container.removeEventListener("wheel", wheel);
+    container.removeEventListener("pointerdown", pointerdown);
+    container.removeEventListener("pointermove", pointermove);
+    container.removeEventListener("pointerup", pointerend);
+    container.removeEventListener("pointercancel", pointerend);
+    container.removeEventListener("lostpointercapture", pointerend);
   };
 }

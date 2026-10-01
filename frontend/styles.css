@@ -1158,6 +1158,7 @@ a.source-chip { display: inline-flex; align-items: center; }
 
 .importance-heading {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 20px;
   align-items: end;
@@ -1167,6 +1168,12 @@ a.source-chip { display: inline-flex; align-items: center; }
   display: block;
   margin-top: 4px;
   font-size: 20px;
+}
+
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .importance-legend {
@@ -1192,6 +1199,29 @@ a.source-chip { display: inline-flex; align-items: center; }
 .importance-chart-wrap {
   position: relative;
   overflow-x: auto;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.importance-chart-wrap.is-dragging {
+  cursor: grabbing;
+}
+
+.importance-chart-wrap svg:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--blue) 42%, transparent);
+  outline-offset: 3px;
+}
+
+.importance-live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .importance-chart-wrap svg {
