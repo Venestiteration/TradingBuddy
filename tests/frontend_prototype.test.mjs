@@ -392,6 +392,237 @@ test("runtime asset switches invalidate out-of-order views and load the selected
   }
 });
 
+test("importance timeline app integration preserves viewport and rejects stale loads", async () => {
+  const previousDocument = globalThis.document;
+  const previousFetch = globalThis.fetch;
+  const previousLocalStorage = globalThis.localStorage;
+  const previousHTMLElement = globalThis.HTMLElement;
+  const previousWindow = globalThis.window;
+  const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+
+  const timeline = [];
+  let chart;
+  class FakeElement {
+    constructor(name) {
+      this.name = name;
+      this.dataset = {};
+      this.classList = { add() {}, remove() {}, toggle() {} };
+      this.style = { setProperty() {} };
+      this.listeners = new Map();
+      this.isConnected = true;
+      this.hidden = false;
+      this._innerHTML = "";
+    }
+
+    get innerHTML() { return this._innerHTML; }
+    set innerHTML(value) {
+      this._innerHTML = String(value);
+      if (this.name === "conversation") timeline.push("replace:conversation");
+    }
+    addEventListener(type, handler) { this.listeners.set(type, handler); }
+    removeEventListener(type, handler) {
+      timeline.push(`remove:chart:${type}`);
+      if (this.listeners.get(type) === handler) this.listeners.delete(type);
+    }
+    setAttribute() {}
+    querySelector(selector) {
+      if (this.name === "conversation" && selector === ".importance-timeline") {
+        return this._innerHTML.includes("importance-timeline") ? chart : null;
+      }
+      return null;
+    }
+    querySelectorAll() { return []; }
+    scrollTo() {}
+    focus() {}
+    requestSubmit() {}
+    closest() { return null; }
+    getBoundingClientRect() { return { left: 0, top: 0, right: 760, bottom: 230, width: 760, height: 230 }; }
+  }
+
+  class ChartElement extends FakeElement {
+    constructor() {
+      super("chart");
+      this.surface = new FakeElement("chart-surface");
+      this.tooltip = new FakeElement("tooltip");
+      this.liveRegion = new FakeElement("live-region");
+    }
+
+    querySelector(selector) {
+      if (selector === ".importance-chart-wrap") return this.surface;
+      if (selector === ".importance-tooltip") return this.tooltip;
+      if (selector === ".importance-live-region") return this.liveRegion;
+      return null;
+    }
+  }
+
+  chart = new ChartElement();
+  class TestStorage {
+    constructor() { this.values = new Map(); }
+    getItem(key) { return this.values.get(key) ?? null; }
+    setItem(key, value) { this.values.set(key, String(value)); }
+    removeItem(key) { this.values.delete(key); }
+  }
+
+  const selectors = [
+    ".app-shell", "#conversation", ".conversation-scroll", "#asset-switcher", "#asset-switcher-label",
+    "#asset-popover", "#composer-dock", "#composer", "#composer textarea", "#composer .send-button", "#detail-sheet", "#toast",
+    "#tour-layer", "#tour-popover", "#tour-focus-ring", "#tour-blocker", ".tour-mask-top", ".tour-mask-left",
+    ".tour-mask-right", ".tour-mask-bottom",
+  ];
+  const elements = new Map(selectors.map((selector) => [selector, new FakeElement(selector)]));
+  elements.set("#conversation", new FakeElement("conversation"));
+  const documentListeners = new Map();
+  const documentStub = {
+    body: { dataset: { apiRoot: "/api" } },
+    activeElement: null,
+    querySelector: (selector) => elements.get(selector) || null,
+    addEventListener: (type, handler) => documentListeners.set(type, handler),
+  };
+  const storage = new TestStorage();
+  storage.setItem("tradingbuddy.tour.sources.v2", "true");
+  storage.setItem("tradingbuddy.tour.ai.v1", "true");
+
+  const response = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+  const rows = (offset = 0) => Array.from({ length: 90 }, (_, index) => ({
+    date: `2026-01-${String(index + 1 + offset).padStart(3, "0")}`,
+    composite_score: 45 + (index % 20),
+    dominant_category: "market",
+    category_scores: { market: 45 + (index % 20) },
+    status: "complete",
+    summary: "测试时间线",
+  }));
+  const brief = {
+    status: "empty",
+    core_conclusion: "暂无新事件",
+    events: [],
+    coverage: { event_count: 0, source_count: 0 },
+  };
+  const overviewRequests = [];
+  const importanceRequests = [];
+  const fetchStub = async (url, options = {}) => {
+    if (url.endsWith("/assets")) return response({ assets: [
+      { id: 1, stock_name: "A", stock_code: "000001", asset_type: "watchlist" },
+      { id: 2, stock_name: "B", stock_code: "000002", asset_type: "watchlist" },
+    ] });
+    if (/\/assets\/\d+\/refresh$/.test(url)) return response({ ok: true });
+    const overviewMatch = url.match(/\/assets\/(\d+)\/overview$/);
+    if (overviewMatch) {
+      return new Promise((resolve) => overviewRequests.push({
+        assetId: Number(overviewMatch[1]),
+        resolve,
+      }));
+    }
+    const importanceMatch = url.match(/\/assets\/(\d+)\/importance\?days=90$/);
+    if (importanceMatch) {
+      return new Promise((resolve) => importanceRequests.push({
+        assetId: Number(importanceMatch[1]),
+        resolve,
+      }));
+    }
+    if (/\/assets\/\d+\/theses$/.test(url)) return response({ history: [] });
+    if (/\/assets\/\d+\/research-brief\?hours=24$/.test(url)) return response(brief);
+    throw new Error(`unexpected request: ${url} ${options.method || "GET"}`);
+  };
+  const waitFor = async (predicate) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (predicate()) return;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail("timed out waiting for mocked app request");
+  };
+  const dispatchRefresh = () => {
+    const target = {
+      closest: (selector) => selector === "[data-action='refresh']" ? { dataset: { action: "refresh" } } : null,
+    };
+    documentListeners.get("click")({ target });
+  };
+  const dispatchZoomIn = () => {
+    chart.listeners.get("click")?.({
+      target: {
+        closest: (selector) => selector === "[data-chart-action]" ? { dataset: { chartAction: "zoom-in" } } : null,
+      },
+    });
+  };
+  const resolveLoad = (index, assetId, name, importanceRows) => {
+    overviewRequests[index].resolve(response({ asset: { stock_name: name, stock_code: `00000${assetId}` }, events: [] }));
+    importanceRequests[index].resolve(response({ rows: importanceRows }));
+  };
+
+  globalThis.document = documentStub;
+  globalThis.fetch = fetchStub;
+  globalThis.localStorage = storage;
+  globalThis.HTMLElement = FakeElement;
+  globalThis.window = { innerWidth: 1280, innerHeight: 800, addEventListener() {} };
+  globalThis.requestAnimationFrame = (callback) => callback();
+
+  try {
+    const { selectAsset } = await import(`../frontend/app.js?timeline-integration=${Date.now()}-${Math.random()}`);
+    await waitFor(() => overviewRequests.length === 1 && importanceRequests.length === 1);
+    const initialRows = rows();
+    resolveLoad(0, 1, "initial A", initialRows);
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("显示 30 / 已加载 90"));
+
+    assert.equal(typeof chart.listeners.get("click"), "function");
+    dispatchZoomIn();
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("显示 15 / 已加载 90"));
+    assert.equal(importanceRequests.length, 1, "viewport changes must not refetch importance data");
+
+    const refreshTimelineStart = timeline.length;
+    dispatchRefresh();
+    await waitFor(() => overviewRequests.length === 2 && importanceRequests.length === 2);
+    resolveLoad(1, 1, "same-domain A", initialRows);
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("显示 15 / 已加载 90"));
+    const refreshTimeline = timeline.slice(refreshTimelineStart);
+    assert.ok(
+      refreshTimeline.findIndex((item) => item === "remove:chart:click")
+      < refreshTimeline.findIndex((item) => item === "replace:conversation"),
+      "chart cleanup must run before replacing conversation HTML",
+    );
+
+    dispatchRefresh();
+    await waitFor(() => overviewRequests.length === 3 && importanceRequests.length === 3);
+    resolveLoad(2, 1, "changed-domain A", rows(1));
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("显示 30 / 已加载 90"));
+
+    dispatchRefresh();
+    await waitFor(() => overviewRequests.length === 4 && importanceRequests.length === 4);
+    selectAsset(2);
+    await waitFor(() => overviewRequests.length === 5 && importanceRequests.length === 5);
+    resolveLoad(3, 1, "stale-before-switch A", rows(2));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale-before-switch A/);
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /2026-01-003/);
+    resolveLoad(4, 2, "current B", rows(4));
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("current B"));
+    assert.match(elements.get("#conversation").innerHTML, /显示 30 \/ 已加载 90/);
+
+    selectAsset(1);
+    await waitFor(() => overviewRequests.length === 6 && importanceRequests.length === 6);
+    selectAsset(1);
+    await waitFor(() => overviewRequests.length === 7 && importanceRequests.length === 7);
+    resolveLoad(5, 1, "stale-newer-load A", rows(3));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale-newer-load A/);
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /2026-01-004/);
+    resolveLoad(6, 1, "current-newest A", rows(5));
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("current-newest A"));
+  } finally {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = previousFetch;
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
+    if (previousHTMLElement === undefined) delete globalThis.HTMLElement;
+    else globalThis.HTMLElement = previousHTMLElement;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = previousRequestAnimationFrame;
+  }
+});
+
 test("keyboard final source-tour actions open settings and restore focus to the highlighted control", async () => {
   const previousDocument = globalThis.document;
   const previousFetch = globalThis.fetch;
