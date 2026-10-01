@@ -92,6 +92,13 @@ def parsed_sse(stream):
 
 
 class ResearchAIValidationTest(unittest.TestCase):
+    def test_global_company_facts_require_source_word_coverage(self):
+        lookup = {"e1": sample_evidence()}
+        for field in ("core_conclusion", "key_tension", "thesis_relationship", "follow_up_question"):
+            with self.subTest(field=field), self.assertRaisesRegex(AIError, "事实"):
+                validate_research_result(valid_result(**{field: "公司已经获得海外订单"}), lookup, "none")
+        validate_research_result(valid_result(core_conclusion="公司已经签署合同"), lookup, "none")
+
     def test_all_visible_strings_reject_unsupported_numbers(self):
         overrides = [
             {field: "合同金额999亿元"} for field in (
@@ -118,7 +125,7 @@ class ResearchAIValidationTest(unittest.TestCase):
             validate_research_result(result, lookup, "none")
 
     def test_title_only_cannot_turn_negated_title_into_positive_fact(self):
-        for title in ("公司未签署合同", "公司尚未签署合同", "公司否认签署合同"):
+        for title in ("公司未签署合同", "公司尚未签署合同", "公司否认签署合同", "公司否认已签署合同", "公司并未曾签署合同"):
             lookup = {"e1": sample_evidence(title=title, excerpt="", content_status="title_only")}
             with self.subTest(title=title), self.assertRaisesRegex(AIError, "否定"):
                 validate_research_result(title_only_result(), lookup, "none")
@@ -438,7 +445,7 @@ class ResearchAIValidationTest(unittest.TestCase):
         )
 
         cleaned, _ = validate_research_result(
-            result, {"e1": sample_evidence()}, "none"
+            result, {"e1": sample_evidence(excerpt="公司持有子公司股权，目前仅能确认这一披露事实。")}, "none"
         )
 
         self.assertEqual(cleaned["core_conclusion"], result["core_conclusion"])
@@ -540,7 +547,7 @@ class ResearchAIValidationTest(unittest.TestCase):
         )
 
         cleaned, _ = validate_research_result(
-            result, {"e1": sample_evidence()}, "none"
+            result, {"e1": sample_evidence(excerpt="机构持仓数据为五成，市场仍处于观望状态。")}, "none"
         )
 
         self.assertEqual(cleaned["core_conclusion"], result["core_conclusion"])

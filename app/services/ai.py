@@ -207,7 +207,13 @@ _TITLE_ONLY_SAFE_PHRASES = (
 )
 _TITLE_ONLY_IGNORABLE_CHARS = "的了已与和及、但仅为是否可并对于于将尚待需"
 _NEGATION = r"(?:尚未|并未|未曾|没有|否认|不曾|不会|不存在|未|不|无)"
-_NEGATED_PREDICATE = re.compile(_NEGATION + r"([\u4e00-\u9fff]{2})")
+_NEGATED_PREDICATE = re.compile(_NEGATION + r"(?:已经|曾经|已|曾|未)*([\u4e00-\u9fff]{2})")
+_GLOBAL_FACT_CLAUSE = re.compile(
+    r"(?:公司|企业|机构|基金|银行|股东|合同|项目|订单)"
+    r"[^。！？；，,:：;]{0,12}"
+    r"(?:已经|已|获得|签署|签订|完成|持有|持仓|收购|实现|发生)"
+    r"[^。！？；，,:：;]*"
+)
 
 
 class AIError(RuntimeError):
@@ -596,6 +602,18 @@ def _validate_visible_support(result: dict, evidence: dict, lookup: dict) -> Non
             (str(item.get("excerpt") or "") if item.get("content_status") != "title_only" else "")
             for item in selected
         )
+        if ids is None and selected:
+            # A small lexical bound for explicit company/event assertions, not
+            # semantic entailment. General research framing remains unrestricted.
+            source_terms = _title_only_lexical_tokens(source_text, remove_safe_phrases=False)
+            for clause in re.split(r"[。！？；，,:：;]|但|不过|因此", text):
+                assertion = _GLOBAL_FACT_CLAUSE.search(clause)
+                if not assertion:
+                    continue
+                claim = re.sub(r"已经|曾经|目前|此前|正在|披露", "", assertion.group())
+                unsupported_terms = _title_only_lexical_tokens(claim, remove_safe_phrases=True) - source_terms
+                if unsupported_terms:
+                    raise AIError("schema", "顶层事实陈述超出选定证据的来源词范围")
         supported = _numeric_tokens(source_text)
         # Snapshot values support market observations, not a coincidentally equal
         # contract amount, company revenue, or other fundamental claim.
