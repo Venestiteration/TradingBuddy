@@ -107,8 +107,8 @@ export function panImportanceViewport(viewport, deltaRows) {
 export function visibleImportanceRows(rows, viewport) {
   if (!Array.isArray(rows) || !rows.length) return [];
   const current = normalizedViewport(viewport, rows.length);
-  const start = clamp(Math.round(current.start), 0, rows.length);
-  const end = clamp(Math.round(current.end), start, rows.length);
+  const start = clamp(Math.floor(current.start), 0, rows.length);
+  const end = clamp(Math.ceil(current.end), start, rows.length);
   return rows.slice(start, end);
 }
 
@@ -121,7 +121,7 @@ export function renderImportanceChart(rows, { escapeHtml, viewport } = {}) {
   const encode = chartEscape(escapeHtml);
   const current = normalizedViewport(viewport || createImportanceViewport(rows.length), rows.length);
   const visibleRows = visibleImportanceRows(rows, current);
-  const startIndex = clamp(Math.round(current.start), 0, rows.length);
+  const startIndex = clamp(Math.floor(current.start), 0, rows.length);
   const entries = visibleRows.map((row, offset) => ({
     row,
     index: startIndex + offset,
@@ -131,7 +131,11 @@ export function renderImportanceChart(rows, { escapeHtml, viewport } = {}) {
   // Viewport edges describe the first and last visible data points, while `end`
   // remains exclusive for slicing and viewport transforms.
   const pointSpan = Math.max(span - 1, 1);
-  const xAt = (index) => CHART_LEFT + ((index - current.start) / pointSpan) * CHART_WIDTH;
+  const xAt = (index) => clamp(
+    CHART_LEFT + ((index - current.start) / pointSpan) * CHART_WIDTH,
+    CHART_LEFT,
+    CHART_RIGHT,
+  );
   const yAt = (score) => 190 - Number(score) * 1.5;
   const radius = clamp(
     6 - ((span - MIN_IMPORTANCE_ROWS) / (MAX_IMPORTANCE_ROWS - MIN_IMPORTANCE_ROWS)) * 3,
@@ -187,8 +191,12 @@ export function renderImportanceChart(rows, { escapeHtml, viewport } = {}) {
   </section>`;
 }
 
-export function bindImportanceChart(container, { rows, onOpen, onRange, escapeHtml }) {
+export function bindImportanceChart(
+  container,
+  { rows, viewport, onOpen, onRange, onViewport, onBoundary, escapeHtml },
+) {
   const tooltip = container.querySelector(".importance-tooltip");
+  let currentViewport = viewport || createImportanceViewport(rows.length);
   const show = (node) => {
     const row = rows.find((item) => item.date === node.dataset.importanceDay);
     if (!row || !tooltip) return;
@@ -199,7 +207,32 @@ export function bindImportanceChart(container, { rows, onOpen, onRange, escapeHt
     tooltip.hidden = false;
   };
   const hide = () => { if (tooltip) tooltip.hidden = true; };
+  const sameViewport = (left, right) => left.start === right.start
+    && left.end === right.end && left.total === right.total;
+  const chartAction = (action) => {
+    const previousViewport = currentViewport;
+    let nextViewport;
+    if (action === "zoom-in") {
+      nextViewport = zoomImportanceViewport(currentViewport, 0.5, 0.5);
+    } else if (action === "zoom-out") {
+      nextViewport = zoomImportanceViewport(currentViewport, 2, 0.5);
+    } else if (action === "reset") {
+      nextViewport = createImportanceViewport(currentViewport.total);
+    }
+    if (!nextViewport) return;
+    currentViewport = nextViewport;
+    if (action === "reset" || !sameViewport(nextViewport, previousViewport)) {
+      onViewport?.(nextViewport, action);
+    } else {
+      onBoundary?.(action, nextViewport);
+    }
+  };
   const click = (event) => {
+    const action = event.target.closest("[data-chart-action]");
+    if (action) {
+      chartAction(action.dataset.chartAction);
+      return;
+    }
     const range = event.target.closest("[data-importance-days]");
     if (range) {
       onRange(Number(range.dataset.importanceDays));

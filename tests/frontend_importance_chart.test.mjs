@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createImportanceViewport,
+  bindImportanceChart,
   panImportanceViewport,
   renderImportanceChart,
   visibleImportanceRows,
@@ -42,7 +43,7 @@ test("renderer removes range buttons and exposes accessible controls", () => {
   assert.match(html, /tabindex="0"/);
 });
 
-test("visible rows round fractional viewport boundaries only for slicing", () => {
+test("visible rows resolve fractional viewport boundaries only for slicing", () => {
   const rows = Array.from({ length: 10 }, (_, index) => sampleRow(index));
   const viewport = { start: 2.4, end: 7.6, minVisible: 7, total: 10 };
   assert.deepEqual(visibleImportanceRows(rows, viewport).map((row) => row.date), [
@@ -53,4 +54,47 @@ test("visible rows round fractional viewport boundaries only for slicing", () =>
     "2026-06-07",
     "2026-06-08",
   ]);
+});
+
+test("fractional viewport edge coordinates stay within the plot", () => {
+  const rows = Array.from({ length: 10 }, (_, index) => sampleRow(index));
+  const html = renderImportanceChart(rows, {
+    escapeHtml: String,
+    viewport: { start: 2.4, end: 7.6, minVisible: 7, total: 10 },
+  });
+  const xCoordinates = [...html.matchAll(/\b(?:cx|x|x1|x2)="([^\"]+)"/g)]
+    .map((match) => Number(match[1]));
+  assert.ok(xCoordinates.length > 0);
+  assert.ok(xCoordinates.every((value) => value >= 42 && value <= 732), xCoordinates.join(", "));
+});
+
+test("chart controls report viewport changes through the binder", () => {
+  const listeners = new Map();
+  const container = {
+    querySelector: () => null,
+    addEventListener: (name, handler) => listeners.set(name, handler),
+    removeEventListener: () => {},
+  };
+  const changes = [];
+  const viewport = createImportanceViewport(90);
+  bindImportanceChart(container, {
+    rows: [],
+    viewport,
+    onViewport: (next, action) => changes.push({ next, action }),
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  const click = (action) => listeners.get("click")({
+    target: {
+      closest: (selector) => selector === "[data-chart-action]"
+        ? { dataset: { chartAction: action } }
+        : null,
+    },
+  });
+  click("zoom-in");
+  click("reset");
+  assert.equal(changes.length, 2);
+  assert.equal(changes[0].action, "zoom-in");
+  assert.equal(changes[0].next.end - changes[0].next.start, 15);
+  assert.deepEqual(changes[1].next, viewport);
 });
