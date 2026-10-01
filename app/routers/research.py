@@ -13,7 +13,7 @@ from ..services.evidence import get_evidence
 from ..services.public_dynamics import get_public_dynamic
 from ..services.research_brief import build_research_brief
 from ..services.research_context import select_research_context
-from ..services.research_events import build_research_events, get_research_event
+from ..services.research_events import build_research_events
 from ..services.visitor_ai import VisitorAIConfig, visitor_ai_config
 from .assets import _asset_row, _current_thesis
 
@@ -45,13 +45,37 @@ def _context_window() -> tuple[datetime, datetime]:
 
 
 def _cluster_event(asset: dict, cluster_id: str) -> dict:
+    try:
+        asset_id_text, anchor_id_text = cluster_id.split(":", 1)
+        requested_asset_id = int(asset_id_text)
+        anchor_dynamic_id = int(anchor_id_text)
+    except (AttributeError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=404, detail="研究事件不存在或不属于当前标的"
+        )
+    if requested_asset_id != asset["id"]:
+        raise HTTPException(
+            status_code=404, detail="研究事件不存在或不属于当前标的"
+        )
+    anchor = get_public_dynamic(anchor_dynamic_id)
+    if not anchor or anchor["asset_id"] != asset["id"]:
+        raise HTTPException(
+            status_code=404, detail="研究事件不存在或不属于当前标的"
+        )
     start, end = _context_window()
-    event = get_research_event(asset["id"], cluster_id, start, end)
+    event = next(
+        (
+            item
+            for item in build_research_events(asset["id"], start, end)
+            if anchor_dynamic_id in item.get("dynamic_ids", [])
+        ),
+        None,
+    )
     if event is None:
         raise HTTPException(
             status_code=404, detail="研究事件不存在或不属于当前标的"
         )
-    return event
+    return {**event, "cluster_id": cluster_id}
 
 
 def _dynamic_event(asset: dict, dynamic_id: int) -> dict:
@@ -108,8 +132,7 @@ def _selected_event(
     headline = daily_brief.get("headline")
     if not isinstance(headline, dict) or not headline.get("cluster_id"):
         return None
-    start, end = _context_window()
-    return get_research_event(asset["id"], headline["cluster_id"], start, end)
+    return _cluster_event(asset, headline["cluster_id"])
 
 
 def _market_snapshot(asset: dict) -> dict | None:

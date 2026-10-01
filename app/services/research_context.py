@@ -260,21 +260,29 @@ def _selected_evidence(
 ) -> list[dict]:
     ordered: list[dict] = []
     seen: set[str] = set()
+    # The selected cluster is authoritative and remains complete. The cap only
+    # limits supplementary daily/background evidence added after it.
+    additional_count = 0
 
-    def add(items: Any) -> None:
+    def add(items: Any, *, bounded_addition: bool = False) -> None:
+        nonlocal additional_count
         if not isinstance(items, list):
             return
         for item in items:
             if not _valid_evidence(item):
                 continue
             evidence_id = str(item["evidence_id"])
-            if evidence_id in seen or len(ordered) >= MAX_EVIDENCE:
+            if evidence_id in seen:
                 continue
+            if bounded_addition and additional_count >= MAX_EVIDENCE:
+                return
             seen.add(evidence_id)
             ordered.append(_pick(item, _EVIDENCE_FIELDS))
+            if bounded_addition:
+                additional_count += 1
 
     add((selected_event or {}).get("evidence", []))
-    add(_main_daily_evidence(daily_brief))
+    add(_main_daily_evidence(daily_brief), bounded_addition=True)
 
     cutoff = _reference_time(selected_event, daily_brief, evidence_items) - timedelta(
         days=LOOKBACK_DAYS
@@ -291,7 +299,7 @@ def _selected_evidence(
         if overlap:
             ranked.append((overlap, published_at, -position, item))
     ranked.sort(key=lambda value: (value[0], value[1], value[2]), reverse=True)
-    add([value[3] for value in ranked])
+    add([value[3] for value in ranked], bounded_addition=True)
     return ordered
 
 

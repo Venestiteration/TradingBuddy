@@ -159,6 +159,111 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         )
 
     @patch("app.routers.research.run_grounded_stream", side_effect=completed_stream)
+    def test_research_cluster_keeps_more_than_twelve_selected_evidence(self, run):
+        now = db.utcnow()
+        expected_ids = {self.primary_evidence_id, self.secondary_evidence_id}
+        for index in range(13):
+            evidence_id = f"cluster-evidence-{index}"
+            expected_ids.add(evidence_id)
+            db.execute(
+                "INSERT INTO evidence (evidence_id, stock_code, source_type, "
+                "source_level, title, excerpt, published_at, fetched_at, "
+                "content_status, raw) VALUES (?, '600000', 'news', "
+                "'secondary', ?, '合同进展', ?, ?, 'excerpt', '{}')",
+                (evidence_id, f"合同进展 {index}", now, now),
+            )
+            db.execute(
+                "INSERT INTO public_dynamic_evidence "
+                "(dynamic_id, evidence_id, relation, created_at) "
+                "VALUES (?, ?, 'corroborating', ?)",
+                (self.dynamic_id, evidence_id, now),
+            )
+        counts_before = {
+            "analyses": db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"],
+            "messages": db.query_one("SELECT COUNT(*) AS count FROM messages")["count"],
+        }
+
+        response = self.client.post(
+            "/api/research/stream",
+            json={"asset_id": self.asset_id, "cluster_id": "1:10"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {item["evidence_id"] for item in run.call_args.kwargs["context"]["evidence"]},
+            expected_ids,
+        )
+        self.assertEqual(
+            {
+                "analyses": db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"],
+                "messages": db.query_one("SELECT COUNT(*) AS count FROM messages")["count"],
+            },
+            counts_before,
+        )
+
+    @patch("app.routers.research.run_grounded_stream", side_effect=completed_stream)
+    def test_24_hour_cluster_anchor_survives_90_day_merge(self, run):
+        now = datetime.now(timezone.utc)
+        current_time = now.isoformat()
+        older_time = (now - timedelta(hours=25)).isoformat()
+        db.execute(
+            "UPDATE public_dynamics SET canonical_title = ?, category = ?, "
+            "published_at = ? WHERE id = ?",
+            (
+                "浦发银行签署重大供货合同",
+                "日常经营与重大合同",
+                current_time,
+                self.dynamic_id,
+            ),
+        )
+        db.execute(
+            "INSERT INTO evidence (evidence_id, stock_code, source_type, "
+            "source_level, title, excerpt, published_at, fetched_at, "
+            "content_status, raw) VALUES ('older-merge-evidence', '600000', "
+            "'news', 'secondary', '浦发银行签订重大供货合同', '旧闻摘要', "
+            "?, ?, 'excerpt', '{}')",
+            (older_time, current_time),
+        )
+        db.execute(
+            "INSERT INTO public_dynamics (id, asset_id, canonical_key, kind, "
+            "category, canonical_title, summary, published_at, importance_score, "
+            "importance_factors_json, formula_version, content_status, "
+            "conflict_status, created_at, updated_at) VALUES "
+            "(5, ?, 'older-merge-dynamic', 'news', '日常经营与重大合同', "
+            "'浦发银行签订重大供货合同', '旧闻摘要', ?, 70, '{}', "
+            "'public-dynamics-v1', 'excerpt', 'none', ?, ?)",
+            (self.asset_id, older_time, current_time, current_time),
+        )
+        db.execute(
+            "INSERT INTO public_dynamic_evidence "
+            "(dynamic_id, evidence_id, relation, created_at) "
+            "VALUES (5, 'older-merge-evidence', 'primary', ?)",
+            (current_time,),
+        )
+
+        brief = self.client.get(
+            f"/api/assets/{self.asset_id}/research-brief?hours=24"
+        )
+        response = self.client.post(
+            "/api/research/stream",
+            json={"asset_id": self.asset_id, "cluster_id": "1:10"},
+        )
+
+        self.assertEqual(brief.status_code, 200)
+        self.assertEqual(brief.json()["headline"]["cluster_id"], "1:10")
+        self.assertEqual(response.status_code, 200)
+        selected = run.call_args.kwargs["context"]["selected_event"]
+        self.assertEqual(selected["cluster_id"], "1:10")
+        self.assertEqual(
+            {item["evidence_id"] for item in run.call_args.kwargs["context"]["evidence"]},
+            {
+                self.primary_evidence_id,
+                self.secondary_evidence_id,
+                "older-merge-evidence",
+            },
+        )
+
+    @patch("app.routers.research.run_grounded_stream", side_effect=completed_stream)
     @patch(
         "app.routers.research.select_research_context",
         wraps=select_research_context,

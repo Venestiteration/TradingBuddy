@@ -58,10 +58,38 @@ class ResearchContextTest(unittest.TestCase):
             thesis=None,
             recent_messages=[{"role": "user", "content": str(i)} for i in range(9)],
         )
-        self.assertLessEqual(len(context["evidence"]), 12)
+        self.assertLessEqual(len(context["evidence"]), 15)
         self.assertLessEqual(len(context["recent_messages"]), 6)
         self.assertEqual(context["evidence"][0]["evidence_id"], evidence[0]["evidence_id"])
         self.assertNotIn("assumed_risk_tolerance", context)
+
+    def test_selected_cluster_evidence_is_not_truncated_by_background_cap(self):
+        selected = [sample_evidence(index) for index in range(15)]
+        background = [
+            sample_evidence(
+                index + 100,
+                published_at="2026-09-27T01:00:00+00:00",
+                title=f"合同背景 {index}",
+            )
+            for index in range(20)
+        ]
+
+        context = select_research_context(
+            asset={"stock_code": "600000", "stock_name": "浦发银行"},
+            question="合同进展如何？",
+            snapshot=None,
+            selected_event=selected_event(selected),
+            daily_brief={"events": []},
+            evidence_items=background,
+            thesis=None,
+            recent_messages=[],
+        )
+
+        self.assertEqual(
+            [item["evidence_id"] for item in context["evidence"][:15]],
+            [item["evidence_id"] for item in selected],
+        )
+        self.assertEqual(len(context["evidence"]), 27)
 
     def test_daily_headline_cluster_precedes_question_overlap(self):
         selected = sample_evidence(1, title="公司人事变动")
