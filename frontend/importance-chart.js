@@ -203,6 +203,7 @@ export function bindImportanceChart(
   let primaryPointerId = null;
   let dragging = false;
   let dragLastX = 0;
+  let dragLastY = 0;
   let pinchStartDistance = 0;
   let pinchStartMidpoint = null;
   let pinchStartViewport = null;
@@ -360,6 +361,7 @@ export function bindImportanceChart(
     if (activePointers.size === 1 && (event.isPrimary !== false) && (event.button == null || event.button === 0)) {
       primaryPointerId = event.pointerId;
       dragLastX = point.x;
+      dragLastY = point.y;
     }
     if (activePointers.size === 2) {
       beginPinch();
@@ -383,22 +385,37 @@ export function bindImportanceChart(
     }
     if (activePointers.size !== 1 || event.pointerId !== primaryPointerId) return;
     const distance = Math.hypot(point.x - pointer.startX, point.y - pointer.startY);
+    const deltaX = point.x - dragLastX;
+    const deltaY = point.y - dragLastY;
     if (!dragging) {
       if (distance <= 4) return;
+      if (Math.abs(point.x - pointer.startX) <= Math.abs(point.y - pointer.startY)) return;
       setDragging(true);
       dragLastX = point.x;
+      dragLastY = point.y;
+      const rect = plotRect();
+      const span = currentViewport.end - currentViewport.start;
+      if (deltaX) applyPan(-deltaX * span / rect.width, "drag-pan");
+      event.preventDefault?.();
+      return;
     }
+    dragLastX = point.x;
+    dragLastY = point.y;
+    if (Math.abs(deltaX) <= Math.abs(deltaY)) return;
     const rect = plotRect();
     const span = currentViewport.end - currentViewport.start;
-    const deltaX = point.x - dragLastX;
-    dragLastX = point.x;
     if (deltaX) applyPan(-deltaX * span / rect.width, "drag-pan");
     event.preventDefault?.();
   };
   const pointerend = (event) => {
     if (event.pointerId == null) return;
+    const wasPinching = pinchStartDistance > 0 || activePointers.size >= 2;
     activePointers.delete(event.pointerId);
     pointerCapture(event, "releasePointerCapture");
+    if (wasPinching) {
+      setDragging(false);
+      primaryPointerId = null;
+    }
     if (activePointers.size < 2) {
       pinchStartDistance = 0;
       pinchStartMidpoint = null;
@@ -444,6 +461,8 @@ export function bindImportanceChart(
     pinchStartDistance = 0;
     pinchStartMidpoint = null;
     pinchStartViewport = null;
+    dragLastX = 0;
+    dragLastY = 0;
     setDragging(false);
     container.removeEventListener("mouseover", mouseover);
     container.removeEventListener("focusin", focusin);

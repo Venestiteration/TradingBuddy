@@ -229,6 +229,68 @@ test("two pointers pinch around their midpoint and cleanup removes every listene
   assert.ok(container.removed.length >= container.listeners.size);
 });
 
+test("vertical primary pointer movement keeps page scrolling until horizontal intent is clear", () => {
+  const container = interactionContainer();
+  const changes = [];
+  bindImportanceChart(container, {
+    rows: Array.from({ length: 90 }, (_, index) => sampleRow(index)),
+    viewport: createImportanceViewport(90),
+    onViewport: (next, action) => changes.push({ next, action }),
+    onBoundary: () => {},
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  const pointer = (clientX, clientY) => ({
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+    clientX,
+    clientY,
+    target: { setPointerCapture() {}, releasePointerCapture() {} },
+    preventDefault() { this.prevented = true; },
+  });
+  container.listeners.get("pointerdown")(pointer(200, 100));
+  const vertical = pointer(202, 40);
+  container.listeners.get("pointermove")(vertical);
+  assert.equal(vertical.prevented, undefined);
+  assert.equal(changes.length, 0);
+  const horizontal = pointer(260, 42);
+  container.listeners.get("pointermove")(horizontal);
+  assert.equal(horizontal.prevented, true);
+  assert.equal(changes.at(-1).action, "drag-pan");
+});
+
+test("ending one pointer after pinch cancels drag until a fresh pointerdown", () => {
+  const container = interactionContainer();
+  const changes = [];
+  bindImportanceChart(container, {
+    rows: Array.from({ length: 90 }, (_, index) => sampleRow(index)),
+    viewport: createImportanceViewport(90),
+    onViewport: (next, action) => changes.push({ next, action }),
+    onBoundary: () => {},
+    onOpen: () => {},
+    escapeHtml: String,
+  });
+  const pointer = (id, clientX, clientY) => ({
+    pointerId: id,
+    isPrimary: id === 1,
+    button: 0,
+    clientX,
+    clientY,
+    target: { setPointerCapture() {}, releasePointerCapture() {} },
+    preventDefault() { this.prevented = true; },
+  });
+  container.listeners.get("pointerdown")(pointer(1, 200, 80));
+  container.listeners.get("pointerdown")(pointer(2, 400, 80));
+  container.listeners.get("pointermove")(pointer(2, 500, 80));
+  const countAfterPinch = changes.length;
+  container.listeners.get("pointerup")(pointer(2, 500, 80));
+  const remainingMove = pointer(1, 260, 82);
+  container.listeners.get("pointermove")(remainingMove);
+  assert.equal(remainingMove.prevented, undefined);
+  assert.equal(changes.length, countAfterPinch);
+});
+
 test("keyboard shortcuts use viewport transforms and report loaded boundaries", () => {
   const container = interactionContainer();
   const changes = [];
@@ -254,4 +316,9 @@ test("production app owns and passes the importance viewport", () => {
   assert.match(appSource, /renderImportanceChart\(state\.importanceRows, \{ escapeHtml, viewport: state\.importanceViewport \}\)/);
   assert.match(appSource, /onViewport:\s*\(viewport, action\) =>/);
   assert.match(appSource, /state\.importanceViewport\s*=\s*viewport/);
+  assert.match(appSource, /importanceChartCleanup/);
+  assert.match(appSource, /function cleanupImportanceChart\(\)/);
+  assert.match(appSource, /state\.importanceChartCleanup\s*=\s*bindImportanceChart/);
+  assert.match(appSource, /function renderConversation\(\) \{[\s\S]*?cleanupImportanceChart\(\);/);
+  assert.match(appSource, /function renderLoading\(\) \{\s*cleanupImportanceChart\(\);[\s\S]*?els\.conversation\.innerHTML/);
 });

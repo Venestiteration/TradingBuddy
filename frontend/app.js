@@ -60,6 +60,7 @@ const state = {
   chartPeriod: "day",
   importanceRows: [],
   importanceViewport: createImportanceViewport(0),
+  importanceChartCleanup: null,
   importanceDays: 90,
   importanceError: "",
   researchBrief: null,
@@ -308,12 +309,18 @@ function renderEmptyState() {
 }
 
 function renderLoading() {
+  cleanupImportanceChart();
   els.conversation.innerHTML = `
     <article class="message assistant empty-state">
       <div class="assistant-kicker"><span class="status-dot support"></span>正在准备研究工作区</div>
       <div class="loading-state">正在获取行情、事件和本地判断…</div>
     </article>
   `;
+}
+
+function cleanupImportanceChart() {
+  if (typeof state.importanceChartCleanup === "function") state.importanceChartCleanup();
+  state.importanceChartCleanup = null;
 }
 
 function eventSourceLabel(event) {
@@ -403,6 +410,7 @@ function renderThesisDraftBanner() {
 }
 
 function renderConversation() {
+  cleanupImportanceChart();
   renderAssetPopover();
   const asset = state.overview?.asset || selectedAsset();
   if (!asset) {
@@ -436,7 +444,7 @@ function bindImportance() {
   if (!chart) return;
   const assetId = state.assetId;
   const overviewLoadSequence = state.overviewLoadSequence;
-  bindImportanceChart(chart, {
+  state.importanceChartCleanup = bindImportanceChart(chart, {
     rows: state.importanceRows,
     viewport: state.importanceViewport,
     escapeHtml,
@@ -1432,6 +1440,7 @@ async function loadAssets(preferredId = null) {
   state.assets = body.assets || [];
   const nextAssetId = preferredId || state.assetId || state.assets[0]?.id || null;
   if (nextAssetId !== state.assetId) {
+    cleanupImportanceChart();
     transitionAssetView(state, nextAssetId, {
       cancelGeneration: abortGeneration,
       loadLocalAIState,
@@ -1511,6 +1520,7 @@ async function loadOverview(assetId) {
     }
   } catch (error) {
     if (isCurrentLoad()) {
+      cleanupImportanceChart();
       state.researchBriefLoading = false;
       state.overview = { asset: selectedAsset(), events: [] };
       els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
@@ -2032,5 +2042,6 @@ function initializeLocalMode() {
 initializeLocalMode().then(() => {
   requestAnimationFrame(() => setTimeout(() => startTour(), 260));
 }).catch((error) => {
+  cleanupImportanceChart();
   els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>启动失败</div><h1>研究工作区暂时无法加载。</h1><p class="error-callout message-error">${escapeHtml(error.message)}</p></article>`;
 });
