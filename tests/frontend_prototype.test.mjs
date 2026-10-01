@@ -85,6 +85,10 @@ test("overview loads the deterministic brief independently and resets cluster st
   assert.match(app, /research-brief\?hours=24/);
   assert.match(app, /importance\?days=\$\{state\.importanceDays\}/);
   assert.match(app, /importanceDays:\s*90/);
+  assert.match(app, /overviewLoadSequence/);
+  assert.match(app, /function resetResearchBriefState\(\) \{\s*state\.importanceRows = \[\];/);
+  assert.match(app, /state\.researchEventDetails = \{\}/);
+  assert.match(app, /data\.cluster_id \|\| null/);
   assert.ok(app.includes("researchBriefError"));
   assert.ok(app.includes("expandedResearchClusterId"));
   assert.ok(app.includes("resetResearchBriefState"));
@@ -355,6 +359,18 @@ test("runtime asset switches invalidate out-of-order views and load the selected
     await waitFor(() => elements.get("#conversation").innerHTML.includes("current A"));
     assert.match(elements.get("#conversation").innerHTML, /old-a/);
     assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale A|stale B/);
+
+    // Two overlapping reloads for the same asset must keep the newer response authoritative.
+    selectAsset(1);
+    await waitFor(() => overviewRequests.length === 4);
+    selectAsset(1);
+    await waitFor(() => overviewRequests.length === 5);
+    overviewRequests[3].resolve(response({ asset: { stock_name: "stale same A" }, events: [] }));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale same A/);
+    overviewRequests[4].resolve(response({ asset: { stock_name: "newest A", stock_code: "000001" }, events: [] }));
+    await waitFor(() => elements.get("#conversation").innerHTML.includes("newest A"));
+    assert.doesNotMatch(elements.get("#conversation").innerHTML, /stale same A/);
   } finally {
     await new Promise((resolve) => setTimeout(resolve, 300));
     if (previousDocument === undefined) delete globalThis.document;

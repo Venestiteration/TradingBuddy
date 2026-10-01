@@ -39,6 +39,8 @@ const state = {
   assets: [],
   assetId: null,
   viewGeneration: 0,
+  overviewLoadSequence: 0,
+  importanceRequestSequence: 0,
   overview: null,
   selectedEventId: null,
   analysis: null,
@@ -427,6 +429,8 @@ function renderConversation() {
 function bindImportance() {
   const chart = els.conversation.querySelector(".importance-timeline");
   if (!chart) return;
+  const assetId = state.assetId;
+  const overviewLoadSequence = state.overviewLoadSequence;
   bindImportanceChart(chart, {
     rows: state.importanceRows,
     escapeHtml,
@@ -434,12 +438,21 @@ function bindImportance() {
     onRange: async (days) => {
       if (days === state.importanceDays) return;
       state.importanceDays = days;
+      const importanceRequestSequence = state.importanceRequestSequence + 1;
+      state.importanceRequestSequence = importanceRequestSequence;
       try {
-        const payload = await api(`/assets/${state.assetId}/importance?days=${days}`);
+        const payload = await api(`/assets/${assetId}/importance?days=${days}`);
+        if (state.assetId !== assetId
+          || state.overviewLoadSequence !== overviewLoadSequence
+          || state.importanceRequestSequence !== importanceRequestSequence) return;
         state.importanceRows = payload.rows || [];
         renderConversation();
       } catch (error) {
-        showToast(error.message, "error");
+        if (state.assetId === assetId
+          && state.overviewLoadSequence === overviewLoadSequence
+          && state.importanceRequestSequence === importanceRequestSequence) {
+          showToast(error.message, "error");
+        }
       }
     },
   });
@@ -1003,24 +1016,27 @@ async function loadPublicDynamics(kind = "all") {
 async function loadResearchEventDetail(clusterId) {
   const assetId = state.assetId;
   const view = captureView(state);
+  const overviewLoadSequence = state.overviewLoadSequence;
+  const isCurrentLoad = () => isCurrentView(state, view)
+    && state.overviewLoadSequence === overviewLoadSequence;
   if (!assetId || !clusterId) return;
   state.researchEventLoadingClusterId = clusterId;
   delete state.researchEventDetailErrors[clusterId];
   if (state.sheetView?.type === "publicDynamics") renderSheet();
   try {
     const body = await api(`/assets/${assetId}/research-events/${encodeURIComponent(clusterId)}`);
-    if (!isCurrentView(state, view)) return;
+    if (!isCurrentLoad()) return;
     state.researchEventDetails[clusterId] = body.event;
     if (state.sheetView?.type === "publicDynamics") {
       state.sheetData = researchBriefSheetData();
       renderSheet();
     }
   } catch (error) {
-    if (!isCurrentView(state, view)) return;
+    if (!isCurrentLoad() || state.sheetView?.type !== "publicDynamics") return;
     state.researchEventDetailErrors[clusterId] = `详情暂时无法更新：${error.message}`;
     if (state.sheetView?.type === "publicDynamics") renderSheet();
   } finally {
-    if (isCurrentView(state, view) && state.researchEventLoadingClusterId === clusterId) {
+    if (isCurrentLoad() && state.researchEventLoadingClusterId === clusterId) {
       state.researchEventLoadingClusterId = null;
       if (state.sheetView?.type === "publicDynamics") renderSheet();
     }
@@ -1075,16 +1091,21 @@ async function extractPublicDynamic(dynamicId) {
 
 async function loadSourceDetail(sourceId) {
   const view = captureView(state);
+  const assetId = state.assetId;
+  const overviewLoadSequence = state.overviewLoadSequence;
+  const isActiveSource = () => isCurrentView(state, view)
+    && state.assetId === assetId
+    && state.overviewLoadSequence === overviewLoadSequence
+    && state.sheetView?.type === "source"
+    && String(state.sheetView.sourceId) === String(sourceId);
   try {
     const body = await api(`/evidence/${encodeURIComponent(sourceId)}`);
-    if (isCurrentView(state, view)
-      && state.sheetView?.type === "source"
-      && state.sheetView.sourceId === sourceId) {
+    if (isActiveSource()) {
       state.sheetData = body.evidence;
       renderSheet();
     }
   } catch (error) {
-    if (isCurrentView(state, view)) showToast(error.message, "error");
+    if (isActiveSource()) showToast(error.message, "error");
   }
 }
 
@@ -1169,6 +1190,9 @@ function aiErrorMessage(data) {
 }
 
 function resetResearchBriefState() {
+  state.importanceRows = [];
+  state.importanceError = "";
+  state.importanceRequestSequence += 1;
   state.researchBrief = null;
   state.researchBriefLoading = true;
   state.researchBriefError = "";
@@ -1226,7 +1250,10 @@ async function runAnalysis(eventOverride = null) {
     }, ({ event, data }) => {
       if (event === "completed") {
         applyIfCurrentView(state, view, () => {
-          saveAnalysis(assetId, { ...data, cluster_id: selectedClusterId || null });
+          saveAnalysis(assetId, {
+            ...data,
+            cluster_id: selectedClusterId || data.cluster_id || null,
+          });
           completed = data;
           state.analysis = data.result;
         });
@@ -1407,12 +1434,31 @@ async function loadOverview(assetId) {
   const requestAssetId = Number(assetId);
   const view = { assetId: requestAssetId, generation: state.viewGeneration };
   if (!isCurrentView(state, view)) return;
+  const overviewLoadSequence = state.overviewLoadSequence + 1;
+  state.overviewLoadSequence = overviewLoadSequence;
+  const isCurrentLoad = () => isCurrentView(state, view)
+    && state.overviewLoadSequence === overviewLoadSequence;
+  if (!isCurrentLoad()) return;
+  const importanceRequestSequence = state.importanceRequestSequence + 1;
+  state.importanceRequestSequence = importanceRequestSequence;
   state.assetId = requestAssetId;
   state.overview = null;
+  state.selectedEventId = null;
+  state.analysis = null;
+  state.importanceRows = [];
+  state.importanceError = "";
   state.researchBrief = null;
   state.researchBriefLoading = true;
   state.researchBriefError = "";
+  state.expandedResearchClusterId = null;
+  state.selectedResearchClusterId = null;
+  state.researchEventDetails = {};
+  state.researchEventDetailErrors = {};
+  state.researchEventLoadingClusterId = null;
+  state.researchAIErrors = {};
+  state.sheetData = null;
   renderLoading();
+  if (state.sheetView?.type === "publicDynamics") renderSheet();
   try {
     const overviewRequest = api(`/assets/${requestAssetId}/overview`);
     const thesesRequest = api(`/assets/${requestAssetId}/theses`).catch(() => ({ history: [] }));
@@ -1422,35 +1468,43 @@ async function loadOverview(assetId) {
       .then((brief) => ({ brief, error: "" }))
       .catch((error) => ({ brief: null, error: error.message }));
     const overview = await overviewRequest;
-    if (!isCurrentView(state, view)) return;
-    if (!applyIfCurrentView(state, view, () => {
+    if (!isCurrentLoad()) return;
+    if (isCurrentLoad()) {
       state.overview = overview;
       if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
       loadLocalAIState();
       renderConversation();
-    })) return;
+    }
     const [theses, importance, briefResult] = await Promise.all([thesesRequest, importanceRequest, briefRequest]);
-    if (!applyIfCurrentView(state, view, () => {
-      overview.thesis_history = theses.history || [];
-      state.overview = overview;
+    if (!isCurrentLoad()) return;
+    overview.thesis_history = theses.history || [];
+    state.overview = overview;
+    if (state.importanceRequestSequence === importanceRequestSequence) {
       state.importanceRows = importance.rows || [];
       state.importanceError = importance.error || "";
-      state.researchBrief = briefResult.brief;
-      state.researchBriefLoading = false;
-      state.researchBriefError = briefResult.error || "";
-      if (briefResult.brief?.headline?.cluster_id && !state.selectedResearchClusterId) {
-        state.selectedResearchClusterId = briefResult.brief.headline.cluster_id;
-      }
-      if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
-      loadLocalAIState();
-      renderConversation();
-    })) return;
+    }
+    state.researchBrief = briefResult.brief;
+    state.researchBriefLoading = false;
+    state.researchBriefError = briefResult.error || "";
+    if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
+    loadLocalAIState();
+    renderConversation();
+    if (state.sheetView?.type === "publicDynamics") {
+      state.sheetData = briefResult.brief ? researchBriefSheetData() : null;
+      renderSheet();
+      if (!briefResult.brief) loadPublicDynamics(state.publicDynamicsKind);
+    }
   } catch (error) {
-    applyIfCurrentView(state, view, () => {
+    if (isCurrentLoad()) {
       state.researchBriefLoading = false;
       state.overview = { asset: selectedAsset(), events: [] };
       els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
-    });
+      if (state.sheetView?.type === "publicDynamics") {
+        state.sheetData = null;
+        renderSheet();
+        loadPublicDynamics(state.publicDynamicsKind);
+      }
+    }
   }
 }
 
