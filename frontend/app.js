@@ -925,6 +925,7 @@ function renderSheet() {
       ? publicDynamicsSheet(state.sheetData, {
         sheetHeader,
         escapeHtml,
+        aiEnabled: aiEnabled(),
         activeKind: view.kind || "all",
         expandedClusterId: state.expandedResearchClusterId,
         analysisByCluster: clusterAnalyses(),
@@ -937,7 +938,7 @@ function renderSheet() {
   }
   if (view.type === "publicDynamicDetail") {
     els.sheet.innerHTML = state.sheetData
-      ? publicDynamicDetailSheet(state.sheetData, { sheetHeader, escapeHtml })
+      ? publicDynamicDetailSheet(state.sheetData, { sheetHeader, escapeHtml, aiEnabled: aiEnabled() })
       : `${sheetHeader("动态详情", "正在读取", true)}<div class="sheet-body"><div class="loading-state">正在读取动态与来源…</div></div>`;
   }
 }
@@ -963,26 +964,34 @@ function openSheet(type, trigger = null, options = {}, pushHistory = true) {
 }
 
 async function loadImportanceDay(date) {
+  const view = captureView(state);
+  const sheetView = state.sheetView;
+  const isActive = () => isCurrentView(state, view) && state.sheetView === sheetView
+    && sheetView?.type === "importanceDay" && sheetView.date === date;
   try {
-    const body = await api(`/assets/${state.assetId}/importance/${encodeURIComponent(date)}`);
-    if (state.sheetView?.type === "importanceDay" && state.sheetView.date === date) {
+    const body = await api(`/assets/${view.assetId}/importance/${encodeURIComponent(date)}`);
+    if (isActive()) {
       state.sheetData = body;
       els.sheet.innerHTML = dailyImportanceSheet(body, { sheetHeader, escapeHtml, aiEnabled });
     }
   } catch (error) {
-    showToast(error.message, "error");
+    if (isActive()) showToast(error.message, "error");
   }
 }
 
 async function loadImportanceCategory(date, category) {
+  const view = captureView(state);
+  const sheetView = state.sheetView;
+  const isActive = () => isCurrentView(state, view) && state.sheetView === sheetView
+    && sheetView?.type === "importanceCategory" && sheetView.date === date && sheetView.category === category;
   try {
-    const body = await api(`/assets/${state.assetId}/importance/${encodeURIComponent(date)}/${encodeURIComponent(category)}`);
-    if (state.sheetView?.type === "importanceCategory" && state.sheetView.date === date && state.sheetView.category === category) {
+    const body = await api(`/assets/${view.assetId}/importance/${encodeURIComponent(date)}/${encodeURIComponent(category)}`);
+    if (isActive()) {
       state.sheetData = body;
       els.sheet.innerHTML = categoryImportanceSheet(body, { sheetHeader, escapeHtml });
     }
   } catch (error) {
-    showToast(error.message, "error");
+    if (isActive()) showToast(error.message, "error");
   }
 }
 
@@ -1283,18 +1292,13 @@ async function runAnalysis(eventOverride = null) {
 }
 
 async function runResearchBriefAI(clusterId = null) {
+  if (!aiEnabled()) return;
   const selectedClusterId = clusterId || null;
   const key = selectedClusterId || "daily";
   const existing = localResearchAnalysis(selectedClusterId);
   if (!selectedClusterId && existing) {
     state.researchBriefAIExpanded = !state.researchBriefAIExpanded;
     renderConversation();
-    return;
-  }
-  if (!aiEnabled()) {
-    state.aiSettingsExpanded = true;
-    openSheet("settings");
-    showToast("请先配置并启用 AI 解读", "error");
     return;
   }
   if (!state.assetId || state.busy) return;

@@ -147,7 +147,12 @@ _USER_FACING_TRADING_PATTERN = re.compile(
     rf"[^。！？；，,:：;]{{0,8}}{_TRADING_ACTION}"
 )
 _DIRECT_TRADING_PHRASE_PATTERN = re.compile(
-    rf"(?:{_TRADING_ACTION}[^。！？；，,:：;]{{0,4}}为宜|暂不参与|不要持有)"
+    rf"(?:{_TRADING_ACTION}[^。！？；，,:：;]{{0,6}}"
+    r"(?:为宜|合适|稳妥|划算|明智|良机|机会|时机|更好|最佳|最优)|"
+    rf"(?:值得|适宜|最好|优先)[^。！？；，,:：;]{{0,4}}{_TRADING_ACTION}|"
+    r"(?:具备|具有|存在|体现|富有)[^。！？；，,:：;]{0,4}投资价值|"
+    r"投资价值[^。！？；，,:：;]{0,4}(?:突出|显著|较高|很高|明显)|"
+    r"暂不参与|不要持有)"
 )
 _EXPLICIT_TRADING_PATTERN = re.compile(
     r"(?:止损|止盈|目标价|抄底|逃顶|低吸|高抛|"
@@ -201,6 +206,8 @@ _TITLE_ONLY_SAFE_PHRASES = (
     "仅有标题", "仅标题", "标题", "正文", "信息", "证据", "相关事实",
 )
 _TITLE_ONLY_IGNORABLE_CHARS = "的了已与和及、但仅为是否可并对于于将尚待需"
+_NEGATION = r"(?:尚未|并未|未曾|没有|否认|不曾|不会|不存在|未|不|无)"
+_NEGATED_PREDICATE = re.compile(_NEGATION + r"([\u4e00-\u9fff]{2})")
 
 
 class AIError(RuntimeError):
@@ -475,6 +482,12 @@ def _title_only_lexical_tokens(value: Any, *, remove_safe_phrases: bool) -> set[
 
 def _assert_title_only_supported(text: str, titles: list[str], label: str) -> None:
     source_text = " ".join(titles)
+    # A character-set subset alone cannot distinguish 未签署 from 签署.
+    # Keep the source's negation attached to any repeated predicate.
+    for predicate in _NEGATED_PREDICATE.findall(source_text):
+        for clause in _TRADING_CLAUSE_SPLIT_PATTERN.split(text):
+            if predicate in clause and not re.search(_NEGATION + r".{0,4}" + re.escape(predicate), clause):
+                raise AIError("schema", f"{label}删除了仅标题证据的否定含义")
     unsupported_numbers = sorted(
         _numeric_tokens(text) - _numeric_tokens(source_text)
     )
@@ -501,6 +514,9 @@ def _snapshot_numeric_tokens(evidence_lookup: dict[str, dict]) -> set[str]:
 
 
 def _contains_trading_instruction(text: str) -> bool:
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(char for char in text if unicodedata.category(char) != "Cf")
+    text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
     for raw_clause in _TRADING_CLAUSE_SPLIT_PATTERN.split(text):
         clause = raw_clause.strip()
         if not clause:
@@ -560,6 +576,37 @@ def _is_evidence_backed_factual_position_statement(
     return not _contains_trading_instruction(remainder)
 
 
+def _validate_visible_support(result: dict, evidence: dict, lookup: dict) -> None:
+    """Apply the existing numeric boundary to every visible string."""
+    # The trading scanner deliberately treats inference advice as unqualified;
+    # evidence support must instead use each inference's actual citation scope.
+    scoped_strings = [
+        (result[field], None) for field in (
+            "core_conclusion", "key_tension", "thesis_relationship",
+            "follow_up_question", "safety_boundary",
+        )
+    ] + [(text, None) for field in ("unknowns", "watch_signals") for text in result[field]]
+    for collection, fields in _REFERENCE_FIELDS.items():
+        for item in result[collection]:
+            scoped_strings.extend((item[field], item["evidence_ids"]) for field in fields)
+    for text, ids in scoped_strings:
+        selected = list(evidence.values()) if ids is None else [evidence[key] for key in ids]
+        source_text = " ".join(
+            str(item.get("title") or "") + " " +
+            (str(item.get("excerpt") or "") if item.get("content_status") != "title_only" else "")
+            for item in selected
+        )
+        supported = _numeric_tokens(source_text)
+        # Snapshot values support market observations, not a coincidentally equal
+        # contract amount, company revenue, or other fundamental claim.
+        market_observation = bool(re.search(r"股价|价格|市值|成交|涨跌|开盘|收盘|市盈率|市净率", text))
+        if market_observation:
+            supported.update(_snapshot_numeric_tokens(lookup))
+        unsupported = _numeric_tokens(text) - supported
+        if unsupported:
+            raise AIError("schema", f"可见内容包含证据或行情快照未支持的数字 {sorted(unsupported)[0]}")
+
+
 def validate_research_result(
     result: dict,
     evidence_lookup: dict[str, dict],
@@ -615,7 +662,7 @@ def validate_research_result(
             evidence_ids = _expect_string_list(
                 item["evidence_ids"], f"{label}.evidence_ids"
             )
-            if collection == "facts" and not evidence_ids:
+            if collection in {"facts", "impact_paths", "inferences"} and not evidence_ids:
                 raise AIError("schema", f"{label}必须引用至少一条证据")
             invalid_ids = [
                 evidence_id
@@ -660,38 +707,7 @@ def validate_research_result(
             text = " ".join(item[field] for field in text_fields)
             _assert_title_only_supported(text, titles, f"{collection}[{index}]")
 
-    snapshot_numbers = _snapshot_numeric_tokens(evidence_lookup)
-    for collection in ("facts", "sections"):
-        for index, item in enumerate(cleaned[collection]):
-            text = " ".join(item[field] for field in _REFERENCE_FIELDS[collection])
-            claimed_numbers = _numeric_tokens(text)
-            if not claimed_numbers:
-                continue
-            supported_numbers = set(snapshot_numbers)
-            cited_numbers: set[str] = set()
-            has_title_only_reference = False
-            for evidence_id in item["evidence_ids"]:
-                evidence = evidence_lookup[evidence_id]
-                evidence_numbers = _numeric_tokens(evidence.get("title"))
-                evidence_numbers.update(_numeric_tokens(evidence.get("excerpt")))
-                supported_numbers.update(evidence_numbers)
-                cited_numbers.update(evidence_numbers)
-                if evidence.get("content_status") == "title_only":
-                    has_title_only_reference = True
-            if has_title_only_reference:
-                title_only_unsupported = sorted(claimed_numbers - cited_numbers)
-                if title_only_unsupported:
-                    raise AIError(
-                        "schema",
-                        f"{collection}[{index}]为仅标题证据添加了数字 "
-                        f"{title_only_unsupported[0]}",
-                    )
-            unsupported = sorted(claimed_numbers - supported_numbers)
-            if unsupported:
-                raise AIError(
-                    "schema",
-                    f"{collection}[{index}]包含证据或行情快照未支持的数字 {unsupported[0]}",
-                )
+    _validate_visible_support(cleaned, public_evidence, evidence_lookup)
 
     for text, evidence_ids in _trading_validation_strings(cleaned):
         if not _contains_trading_instruction(text):

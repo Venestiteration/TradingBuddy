@@ -21,6 +21,12 @@ function statusLabel(status) {
   return "已读取摘要";
 }
 
+function conflictMarkup(claims, escapeHtml) {
+  return `<section class="research-conflicts"><h2>各方陈述 · 尚待核验</h2>${list(claims, (claim) =>
+    `<li><strong>${escapeHtml(claim.title || "来源陈述")}</strong>${claim.summary ? `<p>${escapeHtml(claim.summary)}</p>` : ""}${(claim.evidence_ids || []).map((id) => `<button class="research-citation pressable" type="button" data-research-source="${escapeHtml(id)}">查看来源 ${escapeHtml(id)}</button>`).join("")}</li>`,
+  "来源存在冲突，请查看原始取证记录，暂不采用任何单方结论。")}</section>`;
+}
+
 function safeSourceUrl(value) {
   if (!value) return "";
   try {
@@ -80,6 +86,10 @@ export function renderResearchBrief(brief, options = {}) {
   }
 
   const conflict = brief.conflict_status === "possible";
+  const aiEnabled = options.aiEnabled === true;
+  const claims = brief.conflicting_claims || (brief.events || []).flatMap((event) => event.conflicts || []);
+  const disputedClusters = new Set((brief.events || []).filter((event) => event.conflict_status === "possible").map((event) => event.cluster_id));
+  const knownFacts = (brief.known_facts || []).filter((fact) => !conflict || (fact.cluster_id && !disputedClusters.has(fact.cluster_id)));
   const aiAnalysis = options.aiAnalysis || null;
   const aiExpanded = options.aiExpanded === true;
   const aiPending = options.aiPending === true;
@@ -91,9 +101,10 @@ export function renderResearchBrief(brief, options = {}) {
   return `<article class="message assistant research-brief" data-tour="thesis">
     <div class="assistant-kicker"><span class="status-dot ${conflict ? "uncertain" : "support"}"></span>每日研究报告 · 最近 24 小时</div>
     <div class="research-coverage"><span>${escapeHtml(coverage.event_count ?? brief.events?.length ?? 0)} 个事件簇</span><span>${escapeHtml(coverage.source_count ?? brief.sources?.length ?? 0)} 个来源</span>${conflict ? "<strong>来源存在差异</strong>" : ""}</div>
-    <section class="research-primary" data-tour="dynamic"><span>今天真正发生了什么</span><h1>${escapeHtml(brief.core_conclusion || "暂无可确认结论")}</h1></section>
+    <section class="research-primary" data-tour="dynamic"><span>今天真正发生了什么</span><h1>${escapeHtml(conflict ? "来源陈述存在冲突，尚不能确认一致结论。" : brief.core_conclusion || "暂无可确认结论")}</h1></section>
     <div class="research-brief-grid">
-      <section><h2>已知事实</h2>${list(brief.known_facts, (item) => `<li><span>${escapeHtml(textOf(item))}</span>${sourceButtons(item)}</li>`, "暂无可核验事实。")}</section>
+      <section><h2>已知事实</h2>${list(knownFacts, (item) => `<li><span>${escapeHtml(textOf(item))}</span>${sourceButtons(item)}</li>`, "暂无可核验事实。")}</section>
+      ${conflict ? conflictMarkup(claims, escapeHtml) : ""}
       <section><h2>为什么重要</h2>${list(brief.why_it_matters, (item) => `<li>${escapeHtml(textOf(item))}</li>`, "现有信息不足以形成重要性判断。")}</section>
       <section><h2>影响路径</h2>${list(brief.impact_paths, (item) => `<li>${escapeHtml(textOf(item))}</li>`, "暂无可核验的影响路径。")}</section>
       <section><h2>还有什么不确定</h2>${list(brief.unknowns, (item) => `<li>${escapeHtml(textOf(item))}</li>`, "暂无额外不确定项。")}</section>
@@ -101,13 +112,13 @@ export function renderResearchBrief(brief, options = {}) {
     </div>
     <div class="message-actions research-brief-actions">
       <button class="secondary-button pressable" type="button" data-sheet="publicDynamics">查看来源与公开动态</button>
-      <button class="text-button pressable" type="button" data-research-ai="" aria-expanded="${aiExpanded}" aria-controls="${analysisId}">${aiPending ? "AI 正在解读…" : aiExpanded ? "收起 AI 解读" : "展开 AI 解读"}</button>
+      ${aiEnabled ? `<button class="text-button pressable" type="button" data-research-ai="" aria-expanded="${aiExpanded}" aria-controls="${analysisId}">${aiPending ? "AI 正在解读…" : aiExpanded ? "收起 AI 解读" : "展开 AI 解读"}</button>` : ""}
     </div>
-    <div id="${analysisId}" class="research-ai-panel" ${aiExpanded ? "" : "hidden"} aria-live="polite">
+    ${aiEnabled ? `<div id="${analysisId}" class="research-ai-panel" ${aiExpanded ? "" : "hidden"} aria-live="polite">
       ${aiPending ? '<div class="research-ai-pending" role="status">AI 正在基于当前证据生成解读…</div>' : ""}
       ${options.aiError ? `<div class="research-inline-error" role="status">AI 解读暂时失败：${escapeHtml(options.aiError)}。确定性日报和来源仍可使用。</div>` : ""}
       ${analysisMarkup(aiAnalysis, escapeHtml)}
-    </div>
+    </div>` : ""}
   </article>`;
 }
 
@@ -139,8 +150,9 @@ export function renderResearchEvents(events, options = {}) {
     const aiExpanded = Boolean(aiAnalysis || aiPending || aiError);
     return `<article class="research-event-card${expanded ? " is-expanded" : ""}" data-research-cluster="${escapeHtml(clusterId)}">
       <div class="research-event-meta"><time>${escapeHtml(formatTime(event.published_at))}</time><span>${escapeHtml(statusLabel(event.content_status))}</span>${event.conflict_status === "possible" ? "<strong>来源存在差异</strong>" : ""}</div>
-      <h3>${escapeHtml(event.title || "未命名事件")}</h3>
-      <p class="research-event-summary">${escapeHtml(event.summary || (event.content_status === "title_only" ? "当前仅有标题，暂无可核验正文。" : "暂无摘要。"))}</p>
+      <h3>${escapeHtml(event.conflict_status === "possible" ? "来源陈述存在冲突" : event.title || "未命名事件")}</h3>
+      <p class="research-event-summary">${escapeHtml(event.conflict_status === "possible" ? "各方陈述尚未统一，请对照来源核验。" : event.summary || (event.content_status === "title_only" ? "当前仅有标题，暂无可核验正文。" : "暂无摘要。"))}</p>
+      ${event.conflict_status === "possible" ? conflictMarkup(event.conflicts || [], escapeHtml) : ""}
       <button class="research-disclosure pressable" type="button" data-research-expand="${escapeHtml(clusterId)}" aria-expanded="${expanded}" aria-controls="${controlId}">
         <span>${escapeHtml(event.source_count ?? evidence.length)} 个来源</span><span>${expanded ? "收起" : "查看来源"}</span>
       </button>
@@ -149,14 +161,14 @@ export function renderResearchEvents(events, options = {}) {
         ${options.detailErrorByCluster?.[clusterId] ? `<div class="research-inline-error" role="status">${escapeHtml(options.detailErrorByCluster[clusterId])}</div>` : ""}
         <h4>来源与追溯</h4>
         ${evidence.length ? `<ul class="research-source-list">${evidence.map((source) => sourceMarkup(source, escapeHtml)).join("")}</ul>` : '<p class="research-source-unavailable">暂无可用的取证记录或原文链接。</p>'}
-        <div class="research-cluster-ai">
+        ${options.aiEnabled === true ? `<div class="research-cluster-ai">
           <button class="secondary-button pressable" type="button" data-research-ai="${escapeHtml(clusterId)}" aria-expanded="${aiExpanded}" aria-controls="${controlId}-ai">${aiPending ? "AI 正在解读…" : aiAnalysis ? "重新生成 AI 解读" : "展开 AI 解读"}</button>
           <div id="${controlId}-ai" ${aiExpanded ? "" : "hidden"} aria-live="polite">
             ${aiPending ? '<div class="research-ai-pending" role="status">正在基于该事件簇生成解读…</div>' : ""}
             ${aiError ? `<div class="research-inline-error" role="status">AI 解读暂时失败：${escapeHtml(aiError)}。事件摘要、证据与原文链接仍可使用。</div>` : ""}
             ${analysisMarkup(aiAnalysis, escapeHtml)}
           </div>
-        </div>
+        </div>` : ""}
       </div>
     </article>`;
   }).join("")}</div>`;

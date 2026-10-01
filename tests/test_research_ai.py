@@ -92,6 +92,48 @@ def parsed_sse(stream):
 
 
 class ResearchAIValidationTest(unittest.TestCase):
+    def test_all_visible_strings_reject_unsupported_numbers(self):
+        overrides = [
+            {field: "合同金额999亿元"} for field in (
+                "core_conclusion", "key_tension", "thesis_relationship",
+                "follow_up_question", "safety_boundary",
+            )
+        ] + [
+            {field: ["合同金额999亿元"]} for field in ("unknowns", "watch_signals")
+        ] + [
+            {"impact_paths": [{"path": "合同金额999亿元可能增加收入", "evidence_ids": ["e1"], "uncertainty": "未确认"}]},
+            {"inferences": [{"claim": "合同可能增加收入", "evidence_ids": ["e1"], "uncertainty": "金额999亿元未确认"}]},
+        ]
+        for override in overrides:
+            with self.subTest(override=override), self.assertRaisesRegex(AIError, "数字"):
+                validate_research_result(valid_result(**override), {"e1": sample_evidence()}, "none")
+
+    def test_inference_numbers_must_come_from_cited_not_unrelated_evidence(self):
+        lookup = {"e1": sample_evidence(), "e2": sample_evidence(excerpt="合同金额10亿元")}
+        for field, text_field in (("impact_paths", "path"), ("inferences", "claim")):
+            for references in ([], ["e1"]):
+                with self.subTest(field=field, refs=references), self.assertRaises(AIError):
+                    validate_research_result(valid_result(**{field: [{text_field: "合同金额10亿元可能增加收入", "evidence_ids": references, "uncertainty": "仍需观察"}]}), lookup, "none")
+            result = valid_result(**{field: [{text_field: "合同金额10亿元可能增加收入", "evidence_ids": ["e2"], "uncertainty": "仍需观察"}]})
+            validate_research_result(result, lookup, "none")
+
+    def test_title_only_cannot_turn_negated_title_into_positive_fact(self):
+        for title in ("公司未签署合同", "公司尚未签署合同", "公司否认签署合同"):
+            lookup = {"e1": sample_evidence(title=title, excerpt="", content_status="title_only")}
+            with self.subTest(title=title), self.assertRaisesRegex(AIError, "否定"):
+                validate_research_result(title_only_result(), lookup, "none")
+            safe = title_only_result(
+                core_conclusion=f"标题显示{title}，正文未提供。",
+                facts=[{"claim": title, "evidence_ids": ["e1"]}],
+                follow_up_question="是否继续核验？",
+            )
+            validate_research_result(safe, lookup, "none")
+
+    def test_postposed_advice_and_value_endorsements_are_rejected(self):
+        for advice in ("买入更合适", "卖出更稳妥", "当前价位具备投资价值", "现价值得买入", "现在是建仓良机", "持有更划算", "投资价值突出"):
+            with self.subTest(advice=advice), self.assertRaisesRegex(AIError, "交易指令"):
+                validate_research_result(valid_result(core_conclusion=advice), {"e1": sample_evidence()}, "none")
+
     def test_research_schema_is_strict_and_does_not_request_compatibility_aliases(self):
         expected = {
             "answer_mode", "core_conclusion", "key_tension", "impact_state",

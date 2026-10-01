@@ -26,6 +26,7 @@ function filteredResearchEvents(events, kind) {
 export function publicDynamicsSheet(data, {
   sheetHeader,
   escapeHtml,
+  aiEnabled = false,
   activeKind = "all",
   expandedClusterId = null,
   analysisByCluster = {},
@@ -51,6 +52,7 @@ export function publicDynamicsSheet(data, {
         </div>
         ${renderResearchEvents(events, {
           escapeHtml,
+          aiEnabled,
           expandedClusterId,
           analysisByCluster,
           aiPendingClusterId,
@@ -87,7 +89,7 @@ export function publicDynamicsSheet(data, {
     </div>`;
 }
 
-export function publicDynamicDetailSheet(data, { sheetHeader, escapeHtml }) {
+export function publicDynamicDetailSheet(data, { sheetHeader, escapeHtml, aiEnabled = false }) {
   const item = data.dynamic;
   const sources = (item.evidence || []).map((source) => `
     <button type="button" class="public-source-row pressable" data-source-id="${escapeHtml(source.evidence_id)}">
@@ -102,6 +104,6 @@ export function publicDynamicDetailSheet(data, { sheetHeader, escapeHtml }) {
         <p>分数表示研究注意力，不代表利好或利空。</p></section>
       <div class="button-row">
         ${item.kind === "announcement" && item.content_status !== "full" ? `<button class="secondary-button" type="button" data-extract-dynamic="${escapeHtml(item.id)}">读取公告正文</button>` : ""}
-        <button class="primary-button" type="button" data-analyze-dynamic="${escapeHtml(item.id)}">基于此动态分析</button>
+        ${aiEnabled ? `<button class="primary-button" type="button" data-analyze-dynamic="${escapeHtml(item.id)}">基于此动态分析</button>` : ""}
       </div></div>`;
 }

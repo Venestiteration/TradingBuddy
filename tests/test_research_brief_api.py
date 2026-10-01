@@ -137,6 +137,12 @@ class ResearchBriefAPITest(unittest.TestCase):
         self.assertEqual(body["status"], "degraded")
         self.assertEqual(body["conflict_status"], "possible")
         self.assertTrue(any("冲突" in item for item in body["unknowns"]))
+        self.assertEqual(body["known_facts"], [])
+        self.assertNotEqual(body["core_conclusion"], events.return_value[0]["summary"])
+        self.assertIn("冲突", body["core_conclusion"])
+        self.assertEqual({claim["title"] for claim in body["conflicting_claims"]}, {"10亿元", "12亿元"})
+        self.assertEqual(body["why_it_matters"], [])
+        self.assertEqual(body["impact_paths"], [])
 
     @patch("app.routers.research_brief.get_research_event")
     def test_event_detail_is_asset_scoped(self, get_event):

@@ -103,6 +103,8 @@ def _public_events(events: list[dict]) -> list[dict]:
 def _known_facts(events: list[dict]) -> list[dict]:
     facts = []
     for event in events:
+        if event.get("conflict_status") == "possible":
+            continue
         evidence_ids = [
             evidence["evidence_id"]
             for evidence in event.get("evidence", [])
@@ -113,6 +115,7 @@ def _known_facts(events: list[dict]) -> list[dict]:
                 "claim": event.get("summary") or event.get("title") or "",
                 "evidence_ids": evidence_ids,
                 "basis": "evidence",
+                "cluster_id": event["cluster_id"],
             }
         )
     return facts
@@ -122,7 +125,7 @@ def _rule_items(events: list[dict], key: str) -> list[dict]:
     items = []
     seen_categories = set()
     for event in events:
-        if event.get("content_status") == "title_only":
+        if event.get("content_status") == "title_only" or event.get("conflict_status") == "possible":
             continue
         category = event.get("category")
         rule = _CATEGORY_RULES.get(category)
@@ -165,6 +168,7 @@ def _empty_brief(start: datetime, end: datetime, hours: int) -> dict:
         "headline": None,
         "core_conclusion": "该时间窗口内暂无可用的公开研究事件。",
         "known_facts": [],
+        "conflicting_claims": [],
         "why_it_matters": [],
         "impact_paths": [],
         "inferences": [],
@@ -202,10 +206,19 @@ def build_research_brief(
         "window": {"hours": hours, "start": start.isoformat(), "end": end.isoformat()},
         "headline": {
             "cluster_id": headline["cluster_id"],
-            "title": headline["title"],
+            "title": "来源陈述存在冲突" if headline.get("conflict_status") == "possible" else headline["title"],
         },
-        "core_conclusion": headline.get("summary") or headline["title"],
+        "core_conclusion": (
+            "来源陈述存在冲突，当前无法确认一致结论，请对照各方原始证据。"
+            if headline.get("conflict_status") == "possible"
+            else headline.get("summary") or headline["title"]
+        ),
         "known_facts": _known_facts(events),
+        "conflicting_claims": [
+            {**claim, "cluster_id": event["cluster_id"], "basis": "disputed"}
+            for event in events if event.get("conflict_status") == "possible"
+            for claim in event.get("conflicts", [])
+        ],
         "why_it_matters": _rule_items(events, "why"),
         "impact_paths": _rule_items(events, "impact"),
         "inferences": [],
