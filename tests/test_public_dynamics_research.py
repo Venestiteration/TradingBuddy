@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app import database as db
 from app.main import create_app
+from app.services.research_context import select_research_context
 from app.services.visitor_ai import VisitorAIConfig, visitor_ai_config
 
 
@@ -70,12 +72,14 @@ class PublicDynamicsResearchTest(unittest.TestCase):
             "INSERT INTO public_dynamics (asset_id, canonical_key, kind, category, "
             "canonical_title, summary, published_at, importance_score, "
             "importance_factors_json, formula_version, content_status, "
-            "conflict_status, created_at, updated_at) VALUES "
+            "conflict_status, created_at, updated_at, id) VALUES "
             "(?, 'dynamic-key', 'announcement', '公司公告', '聚合后公开动态', "
             "'聚合摘要', ?, 88, '{}', 'public-dynamics-v1', 'full', "
-            "'none', ?, ?)",
+            "'none', ?, ?, 10)",
             (self.asset_id, now, now, now),
         )
+        self.cluster_id = f"{self.asset_id}:{self.dynamic_id}"
+        self.assertEqual(self.cluster_id, "1:10")
         db.execute(
             "INSERT INTO public_dynamic_evidence "
             "(dynamic_id, evidence_id, relation, created_at) VALUES (?, ?, 'primary', ?)",
@@ -114,13 +118,60 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        context = run.call_args.kwargs["context"]
         self.assertEqual(
-            {item["evidence_id"] for item in run.call_args.kwargs["evidence_items"]},
+            {item["evidence_id"] for item in context["evidence"]},
             {self.primary_evidence_id, self.secondary_evidence_id},
         )
         self.assertEqual(run.call_args.kwargs["conflict_status"], "none")
-        self.assertEqual(run.call_args.kwargs["event"]["conflict_status"], "none")
+        self.assertEqual(context["selected_event"]["conflict_status"], "none")
         self.assertEqual(db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"], 0)
+
+    @patch("app.routers.research.run_grounded_stream", side_effect=completed_stream)
+    def test_research_cluster_loads_every_member_evidence_before_old_ids(self, run):
+        counts_before = {
+            "analyses": db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"],
+            "messages": db.query_one("SELECT COUNT(*) AS count FROM messages")["count"],
+        }
+
+        response = self.client.post(
+            "/api/research/stream",
+            json={
+                "asset_id": self.asset_id,
+                "cluster_id": "1:10",
+                "event_id": "missing-event",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        context = run.call_args.kwargs["context"]
+        self.assertEqual(context["selected_event"]["cluster_id"], "1:10")
+        self.assertEqual(
+            {item["evidence_id"] for item in context["evidence"]},
+            {self.primary_evidence_id, self.secondary_evidence_id},
+        )
+        self.assertEqual(
+            {
+                "analyses": db.query_one("SELECT COUNT(*) AS count FROM analyses")["count"],
+                "messages": db.query_one("SELECT COUNT(*) AS count FROM messages")["count"],
+            },
+            counts_before,
+        )
+
+    @patch("app.routers.research.run_grounded_stream", side_effect=completed_stream)
+    @patch(
+        "app.routers.research.select_research_context",
+        wraps=select_research_context,
+    )
+    def test_research_resolves_cluster_before_selecting_context(self, select, run):
+        response = self.client.post(
+            "/api/research/stream",
+            json={"asset_id": self.asset_id, "cluster_id": "1:10"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("测试公告", select.call_args.kwargs["question"])
+        self.assertIn("测试公告", run.call_args.kwargs["context"]["question"])
 
     @patch("app.routers.chat.run_grounded_stream", side_effect=completed_stream)
     def test_chat_dynamic_loads_every_linked_evidence_without_persistence(self, run):
@@ -138,18 +189,46 @@ class PublicDynamicsResearchTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        context = run.call_args.kwargs["context"]
         linked = {
             self.primary_evidence_id,
             self.secondary_evidence_id,
         }
         self.assertTrue(
             linked.issubset(
-                {item["evidence_id"] for item in run.call_args.kwargs["evidence_items"]}
+                {item["evidence_id"] for item in context["evidence"]}
             )
         )
         self.assertEqual(run.call_args.kwargs["conflict_status"], "possible")
-        self.assertEqual(run.call_args.kwargs["event"]["conflict_status"], "possible")
+        self.assertEqual(context["selected_event"]["conflict_status"], "possible")
         self.assertEqual(db.query_one("SELECT COUNT(*) AS count FROM messages")["count"], 0)
+
+    @patch("app.routers.chat.run_grounded_stream", side_effect=completed_stream)
+    def test_chat_cluster_uses_bounded_relevant_browser_messages(self, run):
+        response = self.client.post(
+            "/api/chat/stream",
+            json={
+                "asset_id": self.asset_id,
+                "question": "聚合后公开动态有什么影响？",
+                "cluster_id": "1:10",
+                "event_id": "missing-event",
+                "recent_messages": [
+                    {"role": "user", "content": f"聚合动态进展 {index}"}
+                    for index in range(6)
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        context = run.call_args.kwargs["context"]
+        self.assertEqual(context["selected_event"]["cluster_id"], "1:10")
+        self.assertEqual(len(context["recent_messages"]), 6)
+        self.assertTrue(
+            all(
+                item["context_type"] == "conversation"
+                for item in context["recent_messages"]
+            )
+        )
 
     @patch("app.services.market.market_service.snapshot", return_value=None)
     @patch("app.services.ai._call_model")
@@ -204,6 +283,48 @@ class PublicDynamicsResearchTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "公开动态不存在或不属于当前标的")
+
+    def test_cluster_from_another_asset_is_rejected(self):
+        now = db.utcnow()
+        other_asset_id = db.execute(
+            "INSERT INTO assets (stock_code, stock_name, asset_type, "
+            "notifications_enabled, created_at, updated_at) "
+            "VALUES ('000001', '平安银行', 'watchlist', 0, ?, ?)",
+            (now, now),
+        )
+
+        response = self.client.post(
+            "/api/chat/stream",
+            json={
+                "asset_id": other_asset_id,
+                "question": "这个事件簇有什么影响？",
+                "cluster_id": "1:10",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "研究事件不存在或不属于当前标的")
+
+    @patch("app.routers.research_brief.run_grounded_stream", side_effect=completed_stream)
+    def test_daily_stream_preserves_explicit_older_cluster_conflict(self, run):
+        published_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        db.execute(
+            "UPDATE public_dynamics SET published_at = ?, conflict_status = 'possible' "
+            "WHERE id = ?",
+            (published_at, self.dynamic_id),
+        )
+
+        response = self.client.post(
+            "/api/research-brief/stream",
+            json={"asset_id": self.asset_id, "cluster_id": "1:10"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run.call_args.kwargs["conflict_status"], "possible")
+        self.assertEqual(
+            run.call_args.kwargs["context"]["selected_event"]["cluster_id"],
+            "1:10",
+        )
 
     @patch("app.routers.assets.collect_market_event")
     @patch("app.routers.assets.market_service.history")

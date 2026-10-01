@@ -12,10 +12,12 @@ from app.services.visitor_ai import VisitorAIConfig, visitor_ai_config
 
 
 def completed_stream(**kwargs):
+    context = kwargs.get("context") or {}
+    event = kwargs.get("event") or context.get("selected_event") or {}
     yield "event: completed\ndata: " + json.dumps({
         "mode": kwargs["mode"],
-        "question": kwargs["question"],
-        "event_id": (kwargs.get("event") or {}).get("event_id"),
+        "question": kwargs.get("question") or context.get("question"),
+        "event_id": event.get("event_id") or event.get("cluster_id"),
         "model": kwargs["config"].model,
         "result": {
             "conclusion": "测试结论",
@@ -26,6 +28,13 @@ def completed_stream(**kwargs):
             "next_checks": [],
             "safety_boundary": "不构成投资建议",
         },
+    }, ensure_ascii=False) + "\n\n"
+
+
+def failed_stream(**kwargs):
+    yield "event: failed\ndata: " + json.dumps({
+        "category": "schema",
+        "message": "模型输出未通过校验",
     }, ensure_ascii=False) + "\n\n"
 
 
@@ -110,12 +119,45 @@ class VisitorAIRoutesTest(unittest.TestCase):
                 "asset_id": self.asset_id,
                 "event_id": "ev-1",
                 "question": "影响是什么？",
-                "recent_messages": [{"role": "user", "content": "上一问"}],
+                "recent_messages": [
+                    {"role": "user", "content": "上一问：影响是什么？"}
+                ],
             },
             headers=self.headers,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(mocked.call_args.kwargs["recent_messages"], [{"role": "user", "content": "上一问"}])
+        self.assertEqual(
+            mocked.call_args.kwargs["context"]["recent_messages"],
+            [{
+                "context_type": "conversation",
+                "role": "user",
+                "content": "上一问：影响是什么？",
+            }],
+        )
+        self.assertEqual(self._ai_counts(), counts_before)
+
+    @patch("app.routers.research_brief.run_grounded_stream", side_effect=failed_stream)
+    def test_daily_ai_failure_keeps_deterministic_brief_available(self, mocked):
+        counts_before = self._ai_counts()
+
+        stream = self.configured_client().post(
+            "/api/research-brief/stream",
+            json={"asset_id": self.asset_id},
+            headers=self.headers,
+        )
+        deterministic = self.client.get(
+            f"/api/assets/{self.asset_id}/research-brief?hours=24"
+        )
+
+        self.assertEqual(stream.status_code, 200)
+        self.assertIn("event: failed", stream.text)
+        self.assertEqual(deterministic.status_code, 200)
+        self.assertEqual(deterministic.json()["status"], "empty")
+        self.assertEqual(mocked.call_args.kwargs["mode"], "daily")
+        self.assertEqual(
+            mocked.call_args.kwargs["context"]["daily_brief"]["status"],
+            "empty",
+        )
         self.assertEqual(self._ai_counts(), counts_before)
 
     def test_recent_messages_rejects_more_than_six_items(self):
