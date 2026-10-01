@@ -13,6 +13,7 @@ const aiLocal = readFileSync(path.join(root, "frontend/ai-local.js"), "utf8");
 const importanceChart = readFileSync(path.join(root, "frontend/importance-chart.js"), "utf8");
 const importanceDetail = readFileSync(path.join(root, "frontend/importance-detail.js"), "utf8");
 const thesisWorkflow = readFileSync(path.join(root, "frontend/thesis-workflow.js"), "utf8");
+const researchBrief = readFileSync(path.join(root, "frontend/research-brief.js"), "utf8");
 
 test("MVP preserves the prototype interaction shell", () => {
   for (const marker of [
@@ -71,11 +72,24 @@ test("importance timeline is keyboard accessible and drillable", () => {
 });
 
 test("public dynamics drilldown preserves the conversation shell and analysis context", () => {
-  assert.ok(app.includes("function renderDynamicMessage"));
+  assert.ok(app.includes("function renderResearchBriefMessage"));
   assert.ok(app.includes("function renderConversation"));
   assert.ok(app.includes('openSheet("publicDynamics"'));
-  assert.match(app, /dynamic_id:\s*selectedOverviewEvent\?\.dynamic_id/);
+  assert.ok(app.includes("renderResearchBrief(brief"));
+  assert.ok(researchBrief.includes("data-sheet=\"publicDynamics\""));
+  assert.match(app, /cluster_id:\s*selectedClusterId/);
   assert.match(app, /runAnalysis\(\{\s*event_id:[\s\S]*dynamic_id:\s*dynamicId/);
+});
+
+test("overview loads the deterministic brief independently and resets cluster state on asset change", () => {
+  assert.match(app, /research-brief\?hours=24/);
+  assert.match(app, /importance\?days=\$\{state\.importanceDays\}/);
+  assert.match(app, /importanceDays:\s*90/);
+  assert.ok(app.includes("researchBriefError"));
+  assert.ok(app.includes("expandedResearchClusterId"));
+  assert.ok(app.includes("resetResearchBriefState"));
+  assert.match(app, /stream\("\/research-brief\/stream"/);
+  assert.match(app, /cluster_id:\s*state\.selectedResearchClusterId/);
 });
 
 test("conversation conclusions require user confirmation before versioning", () => {
@@ -298,6 +312,12 @@ test("runtime asset switches invalidate out-of-order views and load the selected
     }
     if (/\/assets\/\d+\/theses$/.test(url)) return response({ history: [] });
     if (/\/assets\/\d+\/importance\?days=/.test(url)) return response({ rows: [] });
+    if (/\/assets\/\d+\/research-brief\?hours=24$/.test(url)) return response({
+      status: "empty",
+      core_conclusion: "暂无新事件",
+      events: [],
+      coverage: { event_count: 0, source_count: 0 },
+    });
     throw new Error(`unexpected request: ${url}`);
   };
 
@@ -615,7 +635,7 @@ test("AI tour scrolls the first analysis action into the visible workspace", asy
   addElement("tour-mask-left", ".tour-mask-left");
   addElement("tour-mask-right", ".tour-mask-right");
   addElement("tour-mask-bottom", ".tour-mask-bottom");
-  const runAnalysis = addElement("run-analysis", '[data-action="run-analysis"]');
+  const runAnalysis = addElement("run-analysis", '[data-research-ai]');
   runAnalysis.rect = { left: 100, top: 900, right: 220, bottom: 940, width: 120, height: 40 };
   addElement("tour-next", "[data-tour-next]");
 

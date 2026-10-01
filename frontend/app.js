@@ -2,6 +2,7 @@ import { api, streamPost } from "./api.js?v=20260920-zhipu-model-defaults";
 import { bindImportanceChart, renderImportanceChart } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
 import { publicDynamicDetailSheet, publicDynamicsSheet } from "./public-dynamics.js";
+import { bindResearchBrief, renderResearchBrief } from "./research-brief.js";
 import {
   collectThesisForm,
   suggestionValue,
@@ -52,8 +53,19 @@ const state = {
   archiveTab: "thesis",
   chartPeriod: "day",
   importanceRows: [],
-  importanceDays: 30,
+  importanceDays: 90,
   importanceError: "",
+  researchBrief: null,
+  researchBriefLoading: false,
+  researchBriefError: "",
+  researchBriefAIExpanded: false,
+  expandedResearchClusterId: null,
+  selectedResearchClusterId: null,
+  researchEventDetails: {},
+  researchEventDetailErrors: {},
+  researchEventLoadingClusterId: null,
+  researchAIPendingKey: null,
+  researchAIErrors: {},
   thesisContext: null,
   thesisDraft: null,
   thesisDraftPending: false,
@@ -113,7 +125,7 @@ const sourceTourSteps = [
 ];
 
 const aiTourSteps = [
-  { target: '[data-action="run-analysis"]', title: "生成证据约束的分析", body: "分析会区分已知事实、当前推断、未知和下一步核验。" },
+  { target: '[data-research-ai]', title: "按需生成 AI 解读", body: "AI 只在你点击后运行，并会区分已知事实、当前推断、未知和下一步核验。" },
   { target: '[data-tour="composer"]', title: "围绕证据继续追问", body: "问题和回答只保存在当前浏览器，不会进入公共数据库。" },
 ];
 
@@ -136,6 +148,16 @@ function formatDate(value) {
   return value ? String(value).replace("T", " ").slice(0, 16) : "时间未知";
 }
 
+function safeExternalUrl(value) {
+  if (!value) return "";
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
 function formatCompactVolume(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
@@ -152,6 +174,19 @@ function getSelectedOverviewEvent() {
   return (state.overview?.events || []).find(
     (event) => String(event.event_id) === String(state.selectedEventId),
   ) || null;
+}
+
+function researchClusterForEvent(event) {
+  if (event?.cluster_id) return event.cluster_id;
+  if (!event) return null;
+  return (state.researchBrief?.events || []).find((cluster) => (
+    (event.dynamic_id != null && (cluster.dynamic_ids || []).some(
+      (dynamicId) => String(dynamicId) === String(event.dynamic_id),
+    ))
+    || (event.event_id != null && (cluster.evidence || []).some(
+      (source) => String(source.evidence_id) === String(event.event_id),
+    ))
+  ))?.cluster_id || null;
 }
 
 function assetKind(asset) {
@@ -329,36 +364,24 @@ function renderContextLine(asset, event) {
   `;
 }
 
-function renderDynamicMessage(asset, event) {
-  const enabled = aiEnabled();
-  const result = enabled ? state.analysis : null;
-  const status = enabled ? (result ? impactLabel(result) : event ? "信息待核验" : "暂无动态") : "信息源已收集";
-  const statusClass = enabled ? (result ? impactClass(result) : "uncertain") : "support";
-  const headline = event?.title || "今天暂时没有需要解释的新动态";
-  const lede = event?.excerpt || "当前没有可确认的事件。你可以先查看行情，或在研究档案中保存自己的判断。";
-  const promptList = ["这条动态影响我的判断吗？", "只说已知事实", "还有哪些信息要核验？"];
-  const conclusion = enabled
-    ? `<div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span><span>相对于研究档案中的判断</span></div><button class="detail-link pressable" type="button" data-trace="primary">详情</button></div>`
-    : `<div class="conclusion-row"><div class="impact-line"><span class="impact-pill ${statusClass}">${escapeHtml(status)}</span></div></div>`;
-  const actions = enabled
-    ? `<div class="message-actions" data-tour="actions">
-        ${promptList.map((prompt) => `<button class="prompt-chip pressable" type="button" data-prompt="${escapeHtml(prompt)}">${escapeHtml(prompt)}</button>`).join("")}
-        ${result ? '<button class="text-button pressable" type="button" data-analysis-toggle="latest" aria-expanded="false">展开分析</button>' : event ? '<button class="text-button pressable" type="button" data-action="run-analysis">生成分析</button>' : ""}
-      </div>`
-    : "";
-  return `
-    <article class="message assistant" data-tour="thesis">
-      <div data-tour="dynamic">
-        <div class="assistant-kicker"><span class="status-dot ${statusClass}"></span>今日最重要的变化 · ${event ? escapeHtml(eventSourceLabel(event)) : "数据状态"}</div>
-        <h1>${escapeHtml(headline)}</h1>
-        <p class="lede">${escapeHtml(lede)}</p>
-        ${conclusion}
-      </div>
-      ${actions}
-      ${result ? `<div class="analysis" data-analysis="latest" hidden><p class="analysis-conclusion">${escapeHtml(result.conclusion || "未形成结论")}</p>${analysisMarkup(result)}</div>` : ""}
-      <div class="source-line"><span>${state.overview?.events?.length || 0} 个来源</span><span>·</span><button type="button" data-archive-tab="sources">查看来源记录</button></div>
-    </article>
-  `;
+function localResearchAnalysis(clusterId = null) {
+  return [...(state.localAnalyses || [])].reverse().find((item) => {
+    if (clusterId) return String(item.cluster_id || "") === String(clusterId);
+    return item.analysis_scope === "daily" && !item.cluster_id;
+  }) || null;
+}
+
+function renderResearchBriefMessage(asset, brief) {
+  return renderResearchBrief(brief, {
+    escapeHtml,
+    loading: state.researchBriefLoading,
+    error: state.researchBriefError,
+    aiEnabled: aiEnabled(),
+    aiExpanded: state.researchBriefAIExpanded,
+    aiPending: state.researchAIPendingKey === "daily",
+    aiError: state.researchAIErrors.daily || "",
+    aiAnalysis: localResearchAnalysis(null),
+  });
 }
 
 function renderThesisDraftBanner() {
@@ -384,7 +407,7 @@ function renderConversation() {
     const pendingLabel = state.pending.type === "research" ? "正在核验事件与研究判断" : "正在回答当前问题";
     els.conversation.innerHTML = renderContextLine(asset, state.overview?.events?.[0])
       + renderImportanceChart(state.importanceRows, { escapeHtml })
-      + renderDynamicMessage(asset, state.overview?.events?.[0])
+      + renderResearchBriefMessage(asset, state.researchBrief)
       + (state.pending.question ? `<article class="message user"><div class="user-message">${escapeHtml(state.pending.question)}</div></article>` : "")
       + `<article class="message assistant"><div class="assistant-kicker"><span class="status-dot support"></span>AI 正在工作</div><div class="thinking-state"><span>${pendingLabel}</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span></div></article>`;
     bindImportance();
@@ -393,12 +416,10 @@ function renderConversation() {
   const events = state.overview?.events || [];
   const event = events.find((item) => item.event_id === state.selectedEventId) || events[0] || null;
   if (event) state.selectedEventId = event.event_id;
-  const olderEvents = event ? events.filter((item) => item.event_id !== event.event_id).slice(0, 8) : [];
   const messages = aiEnabled() ? state.localMessages : [];
   els.conversation.innerHTML = renderContextLine(asset, event)
     + renderImportanceChart(state.importanceRows, { escapeHtml })
-    + renderDynamicMessage(asset, event)
-    + olderEvents.map(renderEventPush).join("")
+    + renderResearchBriefMessage(asset, state.researchBrief)
     + messages.map(renderMessage).join("");
   bindImportance();
 }
@@ -566,7 +587,8 @@ function metricSheet(metricKey = "price") {
 function sourceSheet(sourceId) {
   const source = state.sheetData || (state.overview?.events || []).find((event) => event.event_id === sourceId);
   if (!source) return `${sheetHeader("证据详情", "正在读取", true)}<div class="sheet-body"><div class="loading-state">正在读取来源详情…</div></div>`;
-  return `${sheetHeader("证据详情", eventSourceLabel(source), true)}<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">${escapeHtml(source.source_level || eventFreshness(source))} · ${escapeHtml(formatDate(source.published_at))}</span><h3>${escapeHtml(source.title)}</h3><p class="evidence-quote">${escapeHtml(source.excerpt || "当前仅保留标题，无法核验正文细节。")}</p><div class="evidence-meta"><span>${escapeHtml(source.publisher || "公开来源")}</span><span>·</span><span>${escapeHtml(source.content_status || "excerpt")}</span></div></section><section class="detail-section"><span class="detail-eyebrow">证据编号</span><p>${escapeHtml(source.evidence_id || source.event_id || sourceId)}</p><div class="button-row">${source.source_url ? `<a class="secondary-button pressable" href="${escapeHtml(source.source_url)}" target="_blank" rel="noreferrer">打开原始来源</a>` : '<span class="muted">当前没有外部链接。</span>'}</div></section></div>`;
+  const sourceUrl = safeExternalUrl(source.source_url);
+  return `${sheetHeader("证据详情", eventSourceLabel(source), true)}<div class="sheet-body"><section class="detail-section"><span class="detail-eyebrow">${escapeHtml(source.source_level || eventFreshness(source))} · ${escapeHtml(formatDate(source.published_at))}</span><h3>${escapeHtml(source.title)}</h3><p class="evidence-quote">${escapeHtml(source.excerpt || "当前仅保留标题，无法核验正文细节。")}</p><div class="evidence-meta"><span>${escapeHtml(source.publisher || "公开来源")}</span><span>·</span><span>${escapeHtml(source.content_status || "excerpt")}</span></div></section><section class="detail-section"><span class="detail-eyebrow">证据编号</span><p>${escapeHtml(source.evidence_id || source.event_id || sourceId)}</p><div class="button-row">${sourceUrl ? `<a class="secondary-button pressable" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">打开原始来源</a>` : '<span class="muted">来源地址暂不可用。</span>'}</div></section></div>`;
 }
 
 function thesisEditSheet() {
@@ -827,6 +849,24 @@ function clearAISettings(trigger = null) {
   }
 }
 
+function researchEventsWithDetails() {
+  return (state.researchBrief?.events || []).map((event) => (
+    state.researchEventDetails[event.cluster_id] || event
+  ));
+}
+
+function clusterAnalyses() {
+  return Object.fromEntries((state.researchBrief?.events || []).map((event) => [
+    event.cluster_id,
+    localResearchAnalysis(event.cluster_id),
+  ]).filter(([, analysis]) => analysis));
+}
+
+function researchBriefSheetData() {
+  if (!state.researchBrief) return null;
+  return { ...state.researchBrief, events: researchEventsWithDetails() };
+}
+
 function renderSheet() {
   if (!state.sheetView) return;
   const view = state.sheetView;
@@ -868,7 +908,17 @@ function renderSheet() {
   }
   if (view.type === "publicDynamics") {
     els.sheet.innerHTML = state.sheetData
-      ? publicDynamicsSheet(state.sheetData, { sheetHeader, escapeHtml, activeKind: view.kind || "all" })
+      ? publicDynamicsSheet(state.sheetData, {
+        sheetHeader,
+        escapeHtml,
+        activeKind: view.kind || "all",
+        expandedClusterId: state.expandedResearchClusterId,
+        analysisByCluster: clusterAnalyses(),
+        aiPendingClusterId: state.researchAIPendingKey === "daily" ? null : state.researchAIPendingKey,
+        aiErrorByCluster: state.researchAIErrors,
+        detailLoadingClusterId: state.researchEventLoadingClusterId,
+        detailErrorByCluster: state.researchEventDetailErrors,
+      })
       : `${sheetHeader("公开动态", "最近 24 小时", true)}<div class="sheet-body"><div class="loading-state">正在读取公开动态…</div></div>`;
   }
   if (view.type === "publicDynamicDetail") {
@@ -928,6 +978,12 @@ async function loadPublicDynamics(kind = "all") {
   const view = captureView(state);
   const sheetView = { ...state.sheetView };
   if (!assetId || sheetView.type !== "publicDynamics") return;
+  const briefData = researchBriefSheetData();
+  if (briefData) {
+    state.sheetData = briefData;
+    renderSheet();
+    return;
+  }
   try {
     const body = await api(`/assets/${assetId}/public-dynamics?hours=24&kind=${encodeURIComponent(kind)}`);
     if (!isCurrentView(state, view)
@@ -941,6 +997,33 @@ async function loadPublicDynamics(kind = "all") {
       && state.viewGeneration === requestGeneration
       && state.sheetView?.type === sheetView.type
       && state.sheetView?.kind === sheetView.kind) showToast(error.message, "error");
+  }
+}
+
+async function loadResearchEventDetail(clusterId) {
+  const assetId = state.assetId;
+  const view = captureView(state);
+  if (!assetId || !clusterId) return;
+  state.researchEventLoadingClusterId = clusterId;
+  delete state.researchEventDetailErrors[clusterId];
+  if (state.sheetView?.type === "publicDynamics") renderSheet();
+  try {
+    const body = await api(`/assets/${assetId}/research-events/${encodeURIComponent(clusterId)}`);
+    if (!isCurrentView(state, view)) return;
+    state.researchEventDetails[clusterId] = body.event;
+    if (state.sheetView?.type === "publicDynamics") {
+      state.sheetData = researchBriefSheetData();
+      renderSheet();
+    }
+  } catch (error) {
+    if (!isCurrentView(state, view)) return;
+    state.researchEventDetailErrors[clusterId] = `详情暂时无法更新：${error.message}`;
+    if (state.sheetView?.type === "publicDynamics") renderSheet();
+  } finally {
+    if (isCurrentView(state, view) && state.researchEventLoadingClusterId === clusterId) {
+      state.researchEventLoadingClusterId = null;
+      if (state.sheetView?.type === "publicDynamics") renderSheet();
+    }
   }
 }
 
@@ -991,14 +1074,17 @@ async function extractPublicDynamic(dynamicId) {
 }
 
 async function loadSourceDetail(sourceId) {
+  const view = captureView(state);
   try {
     const body = await api(`/evidence/${encodeURIComponent(sourceId)}`);
-    if (state.sheetView?.type === "source" && state.sheetView.sourceId === sourceId) {
+    if (isCurrentView(state, view)
+      && state.sheetView?.type === "source"
+      && state.sheetView.sourceId === sourceId) {
       state.sheetData = body.evidence;
       renderSheet();
     }
   } catch (error) {
-    showToast(error.message, "error");
+    if (isCurrentView(state, view)) showToast(error.message, "error");
   }
 }
 
@@ -1050,11 +1136,15 @@ function toggleAnalysis(id) {
 }
 
 function abortGeneration() {
+  const researchKey = state.researchAIPendingKey;
   if (state.abortController) state.abortController.abort();
   state.abortController = null;
   state.pending = null;
+  state.researchAIPendingKey = null;
+  if (researchKey) state.researchAIErrors[researchKey] = "已停止生成";
   setGenerating(false);
   renderConversation();
+  if (state.sheetView?.type === "publicDynamics") renderSheet();
 }
 
 function parseSSEBlock(block) {
@@ -1078,12 +1168,28 @@ function aiErrorMessage(data) {
   return AI_ERROR_MESSAGES[data?.category] || data?.message || "AI 服务暂时不可用，请稍后重试。";
 }
 
+function resetResearchBriefState() {
+  state.researchBrief = null;
+  state.researchBriefLoading = true;
+  state.researchBriefError = "";
+  state.researchBriefAIExpanded = false;
+  state.expandedResearchClusterId = null;
+  state.selectedResearchClusterId = null;
+  state.researchEventDetails = {};
+  state.researchEventDetailErrors = {};
+  state.researchEventLoadingClusterId = null;
+  state.researchAIPendingKey = null;
+  state.researchAIErrors = {};
+  state.analysis = null;
+}
+
 function loadLocalAIState() {
   const workspace = state.assetId ? loadAssetAI(state.assetId) : { messages: [], analyses: [] };
   state.localMessages = workspace.messages;
   state.localAnalyses = workspace.analyses;
   const latest = [...workspace.analyses].reverse().find(
-    (item) => !state.selectedEventId || item.event_id === state.selectedEventId,
+    (item) => (state.selectedResearchClusterId && item.cluster_id === state.selectedResearchClusterId)
+      || (!state.selectedResearchClusterId && (!state.selectedEventId || item.event_id === state.selectedEventId)),
   );
   state.analysis = latest?.result || null;
 }
@@ -1102,6 +1208,8 @@ async function runAnalysis(eventOverride = null) {
   }
   const selectedOverviewEvent = eventOverride || getSelectedOverviewEvent();
   const selectedEventId = selectedOverviewEvent?.event_id || state.selectedEventId;
+  const selectedClusterId = researchClusterForEvent(selectedOverviewEvent)
+    || (!eventOverride ? state.selectedResearchClusterId : null);
   if (!state.assetId || !selectedEventId || state.busy) return;
   const assetId = state.assetId;
   const view = captureView(state);
@@ -1112,12 +1220,13 @@ async function runAnalysis(eventOverride = null) {
     let completed = null;
     await stream("/research/stream", {
       asset_id: assetId,
+      cluster_id: selectedClusterId,
       event_id: selectedEventId,
       dynamic_id: selectedOverviewEvent?.dynamic_id,
     }, ({ event, data }) => {
       if (event === "completed") {
         applyIfCurrentView(state, view, () => {
-          saveAnalysis(assetId, data);
+          saveAnalysis(assetId, { ...data, cluster_id: selectedClusterId || null });
           completed = data;
           state.analysis = data.result;
         });
@@ -1145,6 +1254,82 @@ async function runAnalysis(eventOverride = null) {
   }
 }
 
+async function runResearchBriefAI(clusterId = null) {
+  const selectedClusterId = clusterId || null;
+  const key = selectedClusterId || "daily";
+  const existing = localResearchAnalysis(selectedClusterId);
+  if (!selectedClusterId && existing) {
+    state.researchBriefAIExpanded = !state.researchBriefAIExpanded;
+    renderConversation();
+    return;
+  }
+  if (!aiEnabled()) {
+    state.aiSettingsExpanded = true;
+    openSheet("settings");
+    showToast("请先配置并启用 AI 解读", "error");
+    return;
+  }
+  if (!state.assetId || state.busy) return;
+  const assetId = state.assetId;
+  const view = captureView(state);
+  state.selectedResearchClusterId = selectedClusterId || state.selectedResearchClusterId;
+  if (!selectedClusterId) state.researchBriefAIExpanded = true;
+  state.researchAIPendingKey = key;
+  delete state.researchAIErrors[key];
+  setGenerating(true);
+  renderConversation();
+  if (state.sheetView?.type === "publicDynamics") renderSheet();
+  try {
+    let completed = null;
+    let failed = false;
+    await stream("/research-brief/stream", {
+      asset_id: assetId,
+      cluster_id: selectedClusterId,
+    }, ({ event, data }) => {
+      if (event === "completed") {
+        applyIfCurrentView(state, view, () => {
+          const localResult = {
+            ...data,
+            cluster_id: selectedClusterId,
+            analysis_scope: selectedClusterId ? "cluster" : "daily",
+          };
+          saveAnalysis(assetId, localResult);
+          completed = localResult;
+          state.analysis = data.result;
+        });
+      }
+      if (event === "failed") {
+        applyIfCurrentView(state, view, () => {
+          failed = true;
+          state.researchAIErrors[key] = aiErrorMessage(data);
+        });
+      }
+    });
+    if (completed) {
+      applyIfCurrentView(state, view, () => {
+        loadLocalAIState();
+        showToast("AI 解读已生成", "success");
+      });
+    } else if (!failed) {
+      applyIfCurrentView(state, view, () => {
+        state.researchAIErrors[key] = "未收到完整结果";
+      });
+    }
+  } catch (error) {
+    if (isCurrentView(state, view) && error.name !== "AbortError") {
+      state.researchAIErrors[key] = error.body?.category ? aiErrorMessage(error.body) : error.message;
+    }
+  } finally {
+    applyIfCurrentView(state, view, () => {
+      if (state.researchAIPendingKey === key) state.researchAIPendingKey = null;
+      state.abortController = null;
+      setGenerating(false);
+      renderConversation();
+      if (state.sheetView?.type === "publicDynamics") renderSheet();
+    });
+  }
+}
+
 async function runChat(question) {
   if (!aiEnabled()) {
     state.aiSettingsExpanded = true;
@@ -1165,6 +1350,7 @@ async function runChat(question) {
     let completedResult = null;
     await stream("/chat/stream", {
       asset_id: assetId,
+      cluster_id: state.selectedResearchClusterId,
       event_id: state.selectedEventId,
       dynamic_id: selectedOverviewEvent?.dynamic_id,
       question,
@@ -1210,6 +1396,7 @@ async function loadAssets(preferredId = null) {
       cancelGeneration: abortGeneration,
       loadLocalAIState,
     });
+    resetResearchBriefState();
   }
   renderAssetPopover();
   if (state.assetId) await loadOverview(state.assetId);
@@ -1222,25 +1409,45 @@ async function loadOverview(assetId) {
   if (!isCurrentView(state, view)) return;
   state.assetId = requestAssetId;
   state.overview = null;
+  state.researchBrief = null;
+  state.researchBriefLoading = true;
+  state.researchBriefError = "";
   renderLoading();
   try {
-    const overview = await api(`/assets/${requestAssetId}/overview`);
-    if (!isCurrentView(state, view)) return;
-    const theses = await api(`/assets/${requestAssetId}/theses`).catch(() => ({ history: [] }));
-    if (!isCurrentView(state, view)) return;
-    const importance = await api(`/assets/${requestAssetId}/importance?days=${state.importanceDays}`)
+    const overviewRequest = api(`/assets/${requestAssetId}/overview`);
+    const thesesRequest = api(`/assets/${requestAssetId}/theses`).catch(() => ({ history: [] }));
+    const importanceRequest = api(`/assets/${requestAssetId}/importance?days=${state.importanceDays}`)
       .catch((error) => ({ rows: [], error: error.message }));
+    const briefRequest = api(`/assets/${requestAssetId}/research-brief?hours=24`)
+      .then((brief) => ({ brief, error: "" }))
+      .catch((error) => ({ brief: null, error: error.message }));
+    const overview = await overviewRequest;
+    if (!isCurrentView(state, view)) return;
+    if (!applyIfCurrentView(state, view, () => {
+      state.overview = overview;
+      if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
+      loadLocalAIState();
+      renderConversation();
+    })) return;
+    const [theses, importance, briefResult] = await Promise.all([thesesRequest, importanceRequest, briefRequest]);
     if (!applyIfCurrentView(state, view, () => {
       overview.thesis_history = theses.history || [];
       state.overview = overview;
       state.importanceRows = importance.rows || [];
       state.importanceError = importance.error || "";
+      state.researchBrief = briefResult.brief;
+      state.researchBriefLoading = false;
+      state.researchBriefError = briefResult.error || "";
+      if (briefResult.brief?.headline?.cluster_id && !state.selectedResearchClusterId) {
+        state.selectedResearchClusterId = briefResult.brief.headline.cluster_id;
+      }
       if (!overview.events?.some((event) => event.event_id === state.selectedEventId)) state.selectedEventId = overview.events?.[0]?.event_id || null;
       loadLocalAIState();
       renderConversation();
     })) return;
   } catch (error) {
     applyIfCurrentView(state, view, () => {
+      state.researchBriefLoading = false;
       state.overview = { asset: selectedAsset(), events: [] };
       els.conversation.innerHTML = `<article class="message assistant empty-state"><div class="assistant-kicker"><span class="status-dot uncertain"></span>数据暂时不可用</div><h1>仍可继续维护这个标的。</h1><p>行情或事件接口返回了错误，原始错误如下：</p><div class="error-callout message-error">${escapeHtml(error.message)}</div><div class="message-actions"><button class="primary-button pressable" type="button" data-action="refresh">重试</button></div></article>`;
     });
@@ -1317,6 +1524,7 @@ export function selectAsset(assetId) {
     cancelGeneration: abortGeneration,
     loadLocalAIState,
   });
+  resetResearchBriefState();
   state.popoverOpen = false;
   els.assetPopover.classList.remove("is-open");
   els.assetSwitcher.setAttribute("aria-expanded", "false");
@@ -1491,6 +1699,32 @@ function trapTourFocus(event) {
   }
 }
 
+function bindResearchInteractions(container) {
+  bindResearchBrief(container, {
+    onExpand: (clusterId) => {
+      if (state.sheetView?.type !== "publicDynamics") return;
+      const collapsing = state.expandedResearchClusterId === clusterId;
+      state.expandedResearchClusterId = collapsing ? null : clusterId;
+      if (!collapsing) state.selectedResearchClusterId = clusterId;
+      renderSheet();
+      if (collapsing) {
+        requestAnimationFrame(() => {
+          const trigger = [...els.sheet.querySelectorAll("[data-research-expand]")]
+            .find((item) => item.getAttribute("data-research-expand") === clusterId);
+          trigger?.focus();
+        });
+      } else if (!state.researchEventDetails[clusterId]) {
+        loadResearchEventDetail(clusterId);
+      }
+    },
+    onSource: (sourceId, trigger) => openSheet("source", trigger, { sourceId }),
+    onAI: (clusterId) => runResearchBriefAI(clusterId),
+  });
+}
+
+bindResearchInteractions(els.conversation);
+bindResearchInteractions(els.sheet);
+
 els.assetSwitcher.addEventListener("click", () => state.popoverOpen ? closeAssetPopover() : openAssetPopover());
 
 els.composer.addEventListener("submit", (event) => {
@@ -1635,14 +1869,17 @@ document.addEventListener("click", (event) => {
     const matchingEvent = (state.overview?.events || []).find(
       (item) => String(item.dynamic_id) === String(dynamicId),
     );
+    const matchingClusterId = researchClusterForEvent({ dynamic_id: dynamicId });
     const primaryEvidence = state.sheetData?.dynamic?.evidence?.find((item) => item.relation === "primary")
       || state.sheetData?.dynamic?.evidence?.[0];
     state.selectedEventId = matchingEvent?.event_id || primaryEvidence?.evidence_id || state.selectedEventId;
+    state.selectedResearchClusterId = matchingClusterId || state.selectedResearchClusterId;
     if (aiEnabled()) loadLocalAIState();
     closeSheet();
     runAnalysis({
       event_id: matchingEvent?.event_id || primaryEvidence?.evidence_id,
       dynamic_id: dynamicId,
+      cluster_id: matchingClusterId,
     });
   }
   if (event.target.closest("[data-action='run-analysis']")) runAnalysis();

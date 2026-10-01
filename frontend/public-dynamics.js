@@ -1,3 +1,5 @@
+import { renderResearchEvents } from "./research-brief.js";
+
 const KIND_LABELS = { announcement: "官方", news: "媒体" };
 
 function statusCopy(status) {
@@ -7,7 +9,58 @@ function statusCopy(status) {
   return "当前展示本地缓存";
 }
 
-export function publicDynamicsSheet(data, { sheetHeader, escapeHtml, activeKind = "all" }) {
+function researchCounts(events) {
+  return {
+    all: events.length,
+    official: events.filter((item) => item.kinds?.includes("announcement")).length,
+    media: events.filter((item) => item.kinds?.includes("news")).length,
+  };
+}
+
+function filteredResearchEvents(events, kind) {
+  if (kind === "official") return events.filter((item) => item.kinds?.includes("announcement"));
+  if (kind === "media") return events.filter((item) => item.kinds?.includes("news"));
+  return events;
+}
+
+export function publicDynamicsSheet(data, {
+  sheetHeader,
+  escapeHtml,
+  activeKind = "all",
+  expandedClusterId = null,
+  analysisByCluster = {},
+  aiPendingClusterId = null,
+  aiErrorByCluster = {},
+  detailLoadingClusterId = null,
+  detailErrorByCluster = {},
+} = {}) {
+  if (Array.isArray(data.events)) {
+    const counts = researchCounts(data.events);
+    const events = filteredResearchEvents(data.events, activeKind);
+    const window = data.window || {};
+    return `${sheetHeader("公开动态", "最近 24 小时", true)}
+      <div class="sheet-body research-events-sheet">
+        <div class="public-source-status"><strong>${data.status === "degraded" ? "部分来源存在差异" : "已按事件合并重复报道"}</strong>
+          <span>${escapeHtml(window.start || "")} ${window.end ? `—${escapeHtml(window.end)}` : ""}</span></div>
+        <div class="public-dynamics-counts"><span><strong>${escapeHtml(counts.all)}</strong>全部</span>
+          <span><strong>${escapeHtml(counts.official)}</strong>官方</span><span><strong>${escapeHtml(counts.media)}</strong>媒体</span></div>
+        <div class="public-kind-tabs">
+          <button type="button" class="${activeKind === "all" ? "is-active" : ""}" data-public-kind="all">全部 ${escapeHtml(counts.all)}</button>
+          <button type="button" class="${activeKind === "official" ? "is-active" : ""}" data-public-kind="official">官方 ${escapeHtml(counts.official)}</button>
+          <button type="button" class="${activeKind === "media" ? "is-active" : ""}" data-public-kind="media">媒体 ${escapeHtml(counts.media)}</button>
+        </div>
+        ${renderResearchEvents(events, {
+          escapeHtml,
+          expandedClusterId,
+          analysisByCluster,
+          aiPendingClusterId,
+          aiErrorByCluster,
+          detailLoadingClusterId,
+          detailErrorByCluster,
+        })}
+        <p class="public-completeness-note">事件簇会合并重复报道；完整仅表示已配置通道本次成功，并非覆盖互联网全部信息。</p>
+      </div>`;
+  }
   const counts = data.counts || { all: 0, official: 0, media: 0 };
   const items = (data.items || []).map((item) => `
     <button class="public-dynamic-item pressable" type="button"
