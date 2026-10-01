@@ -527,7 +527,7 @@ def _trading_validation_strings(
     """Yield every user-visible research string and any factual evidence scope."""
     for field in (
         "core_conclusion", "key_tension", "thesis_relationship",
-        "follow_up_question",
+        "follow_up_question", "safety_boundary",
     ):
         yield result[field], None
     for text in result["unknowns"]:

@@ -461,6 +461,14 @@ class ResearchAIValidationTest(unittest.TestCase):
             with self.subTest(label=label), self.assertRaises(AIError):
                 validate_research_result(result, {"e1": sample_evidence()}, "none")
 
+    def test_safety_boundary_is_also_checked_for_direct_advice(self):
+        with self.assertRaises(AIError):
+            validate_research_result(
+                valid_result(safety_boundary="建议买入并持有"),
+                {"e1": sample_evidence()},
+                "none",
+            )
+
     def test_evidence_backed_factual_section_is_not_scanned_as_advice(self):
         section = {
             "heading": "已披露行为",
