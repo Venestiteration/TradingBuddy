@@ -207,12 +207,12 @@ _TITLE_ONLY_SAFE_PHRASES = (
 )
 _TITLE_ONLY_IGNORABLE_CHARS = "的了已与和及、但仅为是否可并对于于将尚待需"
 _NEGATION = r"(?:尚未|并未|未曾|没有|否认|不曾|不会|不存在|未|不|无)"
-_NEGATED_PREDICATE = re.compile(_NEGATION + r"(?:已经|曾经|已|曾|未)*([\u4e00-\u9fff]{2})")
-_GLOBAL_FACT_CLAUSE = re.compile(
-    r"(?:公司|企业|机构|基金|银行|股东|合同|项目|订单)"
-    r"[^。！？；，,:：;]{0,12}"
-    r"(?:已经|已|获得|签署|签订|完成|持有|持仓|收购|实现|发生)"
-    r"[^。！？；，,:：;]*"
+_NEGATED_PREDICATE = re.compile(_NEGATION + r"(?:已经|曾经|已|曾|未|能|再)*([\u4e00-\u9fff]{2})")
+_GLOBAL_FACT_MARKER = re.compile(
+    r"(?:已经|已(?!确认判断)|获得|签署|签订|完成|持有|持仓|收购|实现|发生)"
+)
+_GLOBAL_UNCERTAINTY = re.compile(
+    r"可能|或许|预计|有望|如果|假如|若|是否|尚待|尚不清楚|无法核验|尚未确认"
 )
 
 
@@ -603,14 +603,14 @@ def _validate_visible_support(result: dict, evidence: dict, lookup: dict) -> Non
             for item in selected
         )
         if ids is None and selected:
-            # A small lexical bound for explicit company/event assertions, not
-            # semantic entailment. General research framing remains unrestricted.
+            # Bound explicit assertions regardless of the named/omitted subject.
+            # A preceding qualifier keeps questions and hypotheses usable.
             source_terms = _title_only_lexical_tokens(source_text, remove_safe_phrases=False)
             for clause in re.split(r"[。！？；，,:：;]|但|不过|因此", text):
-                assertion = _GLOBAL_FACT_CLAUSE.search(clause)
-                if not assertion:
+                assertion = _GLOBAL_FACT_MARKER.search(clause)
+                if not assertion or _GLOBAL_UNCERTAINTY.search(clause[:assertion.start()]):
                     continue
-                claim = re.sub(r"已经|曾经|目前|此前|正在|披露", "", assertion.group())
+                claim = re.sub(r"已经|曾经|目前|此前|正在|披露", "", clause)
                 unsupported_terms = _title_only_lexical_tokens(claim, remove_safe_phrases=True) - source_terms
                 if unsupported_terms:
                     raise AIError("schema", "顶层事实陈述超出选定证据的来源词范围")
@@ -725,14 +725,14 @@ def validate_research_result(
             text = " ".join(item[field] for field in text_fields)
             _assert_title_only_supported(text, titles, f"{collection}[{index}]")
 
-    _validate_visible_support(cleaned, public_evidence, evidence_lookup)
-
     for text, evidence_ids in _trading_validation_strings(cleaned):
         if not _contains_trading_instruction(text):
             continue
         if _is_evidence_backed_factual_position_statement(text, evidence_ids):
             continue
         raise AIError("schema", "模型输出包含交易指令")
+
+    _validate_visible_support(cleaned, public_evidence, evidence_lookup)
 
     notes: list[str] = []
     if conflict_status == "possible":
