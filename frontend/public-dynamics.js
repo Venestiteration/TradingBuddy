@@ -1,4 +1,4 @@
-import { renderResearchEvents } from "./research-brief.js";
+import { renderResearchEvents } from "./research-brief.js?v=20261003-source-sync";
 
 const KIND_LABELS = { announcement: "官方", news: "媒体" };
 
@@ -39,9 +39,17 @@ export function publicDynamicsSheet(data, {
     const counts = researchCounts(data.events);
     const events = filteredResearchEvents(data.events, activeKind);
     const window = data.window || {};
+    const sourceStatus = data.source_status || {};
+    const statusText = data.status === "degraded"
+      ? "部分来源存在差异"
+      : sourceStatus.status === "partial"
+        ? "部分来源更新失败，已保留可核验内容"
+        : sourceStatus.status === "failed"
+          ? "来源同步失败，当前展示本地内容"
+          : "已按事件合并重复报道";
     return `${sheetHeader("公开动态", "最近 24 小时", true)}
       <div class="sheet-body research-events-sheet">
-        <div class="public-source-status"><strong>${data.status === "degraded" ? "部分来源存在差异" : "已按事件合并重复报道"}</strong>
+        <div class="public-source-status"><strong>${escapeHtml(statusText)}</strong>
           <span>${escapeHtml(window.start || "")} ${window.end ? `—${escapeHtml(window.end)}` : ""}</span></div>
         <div class="public-dynamics-counts"><span><strong>${escapeHtml(counts.all)}</strong>全部</span>
           <span><strong>${escapeHtml(counts.official)}</strong>官方</span><span><strong>${escapeHtml(counts.media)}</strong>媒体</span></div>

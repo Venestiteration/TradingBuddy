@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from .public_dynamics import source_status
 from .research_events import build_research_events
 
 
@@ -161,7 +162,9 @@ def _watch_signals(events: list[dict]) -> list[dict]:
     return signals
 
 
-def _empty_brief(start: datetime, end: datetime, hours: int) -> dict:
+def _empty_brief(
+    start: datetime, end: datetime, hours: int, sync_state: dict | None = None
+) -> dict:
     return {
         "status": "empty",
         "window": {"hours": hours, "start": start.isoformat(), "end": end.isoformat()},
@@ -178,6 +181,12 @@ def _empty_brief(start: datetime, end: datetime, hours: int) -> dict:
         "coverage": {"event_count": 0, "source_count": 0},
         "conflict_status": "none",
         "events": [],
+        "source_status": sync_state or {
+            "status": "never_synced",
+            "last_attempt_at": None,
+            "last_complete_at": None,
+            "providers": [],
+        },
     }
 
 
@@ -188,8 +197,9 @@ def build_research_brief(
     end = _normalized_now(now)
     start = end - timedelta(hours=hours)
     events = build_research_events(asset["id"], start, end)
+    sync_state = source_status(asset["id"])
     if not events:
-        return _empty_brief(start, end, hours)
+        return _empty_brief(start, end, hours, sync_state)
 
     headline = max(
         events,
@@ -233,4 +243,5 @@ def build_research_brief(
         },
         "conflict_status": "possible" if has_conflict else "none",
         "events": _public_events(events),
+        "source_status": sync_state,
     }

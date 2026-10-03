@@ -149,36 +149,127 @@ class CninfoAnnouncementAdapter:
 
 class EastmoneyNoticeAdapter:
     provider = PROVIDER_EASTMONEY_NOTICES
+    endpoint = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 
-    def __init__(self, ak_module):
+    def __init__(self, ak_module, client: httpx.Client | None = None):
         self.ak = ak_module
+        self.client = client
+
+    def _fetch_direct(self, stock_code, start, end):
+        """Read the structured Eastmoney endpoint instead of AKShare's fragile frame.
+
+        AKShare's notice helper currently assumes every response contains a
+        Chinese ``代码`` column. Eastmoney now returns nested ``codes`` and
+        ``columns`` objects, so parsing the provider response here preserves
+        the same evidence boundary without depending on that internal schema.
+        """
+        page_index = 1
+        page_size = 100
+        items = []
+        start_date = _business_time(start).strftime("%Y%m%d")
+        end_date = _business_time(end).strftime("%Y%m%d")
+        while page_index <= 20:
+            response = self.client.get(
+                self.endpoint,
+                params={
+                    "sr": "-1",
+                    "page_size": page_size,
+                    "page_index": page_index,
+                    "ann_type": "A",
+                    "client_source": "web",
+                    "f_node": "0",
+                    "s_node": "0",
+                    "stock_list": stock_code,
+                    "begin_time": start_date,
+                    "end_time": end_date,
+                },
+                headers={"Referer": "https://data.eastmoney.com/"},
+                timeout=12.0,
+            )
+            response.raise_for_status()
+            payload = response.json() or {}
+            data = payload.get("data") or {}
+            rows = data.get("list") or []
+            for row in rows:
+                codes = row.get("codes") or []
+                matching_code = next(
+                    (
+                        code
+                        for code in codes
+                        if _string(code.get("stock_code")) == _string(stock_code)
+                    ),
+                    codes[0] if codes else {},
+                )
+                columns = row.get("columns") or []
+                column = columns[0] if columns else {}
+                article_code = _string(row.get("art_code"))
+                title = _string(row.get("title") or row.get("title_ch"))
+                if not title:
+                    continue
+                source_url = (
+                    f"https://data.eastmoney.com/notices/detail/{stock_code}/"
+                    f"{article_code}.html"
+                    if article_code
+                    else ""
+                )
+                published_value = row.get("notice_date") or row.get("display_time")
+                if not published_value:
+                    continue
+                items.append(
+                    RawDynamic(
+                        provider=self.provider,
+                        provider_item_id=article_code or source_url or title,
+                        stock_code=stock_code,
+                        kind="announcement",
+                        category=_string(column.get("column_name")),
+                        title=title,
+                        excerpt="",
+                        published_at=_iso(published_value),
+                        publisher="东方财富公告",
+                        source_url=source_url,
+                        source_level="primary",
+                        content_status="title_only",
+                        raw_metadata={
+                            "short_name": _string(matching_code.get("short_name")),
+                            "direct_endpoint": self.endpoint,
+                        },
+                    )
+                )
+            total_hits = int(data.get("total_hits") or 0)
+            if not rows or len(rows) < page_size or page_index * page_size >= total_hits:
+                break
+            page_index += 1
+        return tuple(items)
 
     def fetch(self, stock_code, start, end, attempted_at):
         try:
-            frame = self.ak.stock_individual_notice_report(
-                security=stock_code,
-                symbol="全部",
-                begin_date=_business_time(start).strftime("%Y%m%d"),
-                end_date=_business_time(end).strftime("%Y%m%d"),
-            )
-            items = tuple(
-                RawDynamic(
-                    provider=self.provider,
-                    provider_item_id=_string(row.get("网址") or row.get("公告标题")),
-                    stock_code=stock_code,
-                    kind="announcement",
-                    category=_string(row.get("公告类型")),
-                    title=_string(row.get("公告标题")),
-                    excerpt="",
-                    published_at=_iso(row.get("公告日期")),
-                    publisher="东方财富公告",
-                    source_url=_string(row.get("网址")),
-                    source_level="primary",
-                    content_status="title_only",
+            if self.client is not None:
+                items = self._fetch_direct(stock_code, start, end)
+            else:
+                frame = self.ak.stock_individual_notice_report(
+                    security=stock_code,
+                    symbol="全部",
+                    begin_date=_business_time(start).strftime("%Y%m%d"),
+                    end_date=_business_time(end).strftime("%Y%m%d"),
                 )
-                for _, row in frame.iterrows()
-                if _string(row.get("公告标题"))
-            )
+                items = tuple(
+                    RawDynamic(
+                        provider=self.provider,
+                        provider_item_id=_string(row.get("网址") or row.get("公告标题")),
+                        stock_code=stock_code,
+                        kind="announcement",
+                        category=_string(row.get("公告类型")),
+                        title=_string(row.get("公告标题")),
+                        excerpt="",
+                        published_at=_iso(row.get("公告日期")),
+                        publisher="东方财富公告",
+                        source_url=_string(row.get("网址")),
+                        source_level="primary",
+                        content_status="title_only",
+                    )
+                    for _, row in frame.iterrows()
+                    if _string(row.get("公告标题"))
+                )
             return ProviderResult(
                 self.provider, "success" if items else "empty", items, attempted_at
             )

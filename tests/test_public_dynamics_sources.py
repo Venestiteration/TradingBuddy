@@ -39,6 +39,21 @@ class FakeHttpClient:
         return FakeResponse(self.pages[len(self.post_calls) - 1])
 
 
+class FakeEastmoneyNoticeHttpClient:
+    def __init__(self, pages, total_hits=None):
+        self.pages = pages
+        self.total_hits = total_hits if total_hits is not None else sum(
+            len(page) for page in pages
+        )
+        self.get_calls = []
+
+    def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
+        page_index = kwargs["params"]["page_index"]
+        page = self.pages[min(page_index - 1, len(self.pages) - 1)]
+        return FakeResponse({"data": {"list": page, "total_hits": self.total_hits}})
+
+
 class RaisingResponse:
     def __init__(self, exc):
         self.exc = exc
@@ -129,6 +144,29 @@ class PublicDynamicsSourcesTest(unittest.TestCase):
         self.assertEqual(news.items[0].kind, "news")
         self.assertEqual(news.items[0].published_at, "2026-09-14T23:58:00+00:00")
         self.assertEqual(notices.items[0].published_at, "2026-09-14T16:00:00+00:00")
+
+    def test_eastmoney_notice_direct_endpoint_parses_nested_provider_schema(self):
+        client = FakeEastmoneyNoticeHttpClient([
+            [{
+                "art_code": "AN456",
+                "title": "关于签署重大合同的公告",
+                "notice_date": "2026-09-15 00:00:00",
+                "codes": [{"stock_code": "600519", "short_name": "贵州茅台"}],
+                "columns": [{"column_name": "重大合同"}],
+            }]
+        ])
+        result = EastmoneyNoticeAdapter(FakeAk([], []), client).fetch(
+            "600519", self.start, self.end, "attempt"
+        )
+        self.assertEqual(result.status, "success")
+        self.assertEqual(len(result.items), 1)
+        item = result.items[0]
+        self.assertEqual(item.provider_item_id, "AN456")
+        self.assertEqual(item.category, "重大合同")
+        self.assertEqual(item.source_level, "primary")
+        self.assertEqual(item.published_at, "2026-09-14T16:00:00+00:00")
+        self.assertIn("/600519/AN456.html", item.source_url)
+        self.assertEqual(client.get_calls[0][1]["params"]["stock_list"], "600519")
 
     def test_source_queries_use_shanghai_business_date_across_utc_midnight(self):
         start = datetime(2026, 9, 14, 17, tzinfo=timezone.utc)

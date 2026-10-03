@@ -21,6 +21,20 @@ function statusLabel(status) {
   return "已读取摘要";
 }
 
+function sourceCoverageNotice(sourceStatus, escapeHtml) {
+  const status = sourceStatus?.status;
+  if (!status || status === "complete") return "";
+  const providers = Array.isArray(sourceStatus.providers) ? sourceStatus.providers : [];
+  const failedCount = providers.filter((provider) => provider.last_status === "failed").length;
+  const detail = failedCount ? `（${failedCount} 个来源未完成）` : "";
+  const message = status === "never_synced"
+    ? "来源尚未完成首次同步，当前仅显示已有本地内容。"
+    : status === "failed"
+      ? "来源同步暂时失败，当前仍可查看已有本地内容。"
+      : `来源仍在部分更新，当前内容可能不完整${detail}。`;
+  return `<p class="research-inline-error research-source-status" role="status">${escapeHtml(message)}</p>`;
+}
+
 function conflictMarkup(claims, escapeHtml) {
   return `<section class="research-conflicts"><h2>各方陈述 · 尚待核验</h2>${list(claims, (claim) =>
     `<li><strong>${escapeHtml(claim.title || "来源陈述")}</strong>${claim.summary ? `<p>${escapeHtml(claim.summary)}</p>` : ""}${(claim.evidence_ids || []).map((id) => `<button class="research-citation pressable" type="button" data-research-source="${escapeHtml(id)}">查看来源 ${escapeHtml(id)}</button>`).join("")}</li>`,
@@ -81,6 +95,7 @@ export function renderResearchBrief(brief, options = {}) {
       <div class="assistant-kicker"><span class="status-dot support"></span>每日研究报告 · 最近 24 小时</div>
       <h1>最近 24 小时暂无可核验的新事件</h1>
       <p>这只表示已配置的来源在当前窗口内没有新内容，不代表公司没有变化。</p>
+      ${sourceCoverageNotice(brief.source_status, escapeHtml)}
       <div class="message-actions"><button class="secondary-button pressable" type="button" data-sheet="publicDynamics">查看公开动态</button></div>
     </article>`;
   }
@@ -102,6 +117,7 @@ export function renderResearchBrief(brief, options = {}) {
     <div class="assistant-kicker"><span class="status-dot ${conflict ? "uncertain" : "support"}"></span>每日研究报告 · 最近 24 小时</div>
     <div class="research-coverage"><span>${escapeHtml(coverage.event_count ?? brief.events?.length ?? 0)} 个事件簇</span><span>${escapeHtml(coverage.source_count ?? brief.sources?.length ?? 0)} 个来源</span>${conflict ? "<strong>来源存在差异</strong>" : ""}</div>
     <section class="research-primary" data-tour="dynamic"><span>今天真正发生了什么</span><h1>${escapeHtml(conflict ? "来源陈述存在冲突，尚不能确认一致结论。" : brief.core_conclusion || "暂无可确认结论")}</h1></section>
+    ${sourceCoverageNotice(brief.source_status, escapeHtml)}
     <div class="research-brief-grid">
       <section><h2>已知事实</h2>${list(knownFacts, (item) => `<li><span>${escapeHtml(textOf(item))}</span>${sourceButtons(item)}</li>`, "暂无可核验事实。")}</section>
       ${conflict ? conflictMarkup(claims, escapeHtml) : ""}

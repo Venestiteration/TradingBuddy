@@ -90,7 +90,7 @@ def _default_adapters(client: httpx.Client) -> tuple[SourceAdapter, ...]:
 
     return (
         CninfoAnnouncementAdapter(client),
-        EastmoneyNoticeAdapter(ak),
+        EastmoneyNoticeAdapter(ak, client),
         EastmoneyNewsAdapter(ak),
     )
 

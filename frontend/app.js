@@ -5,8 +5,8 @@ import {
   renderImportanceChart,
 } from "./importance-chart.js";
 import { categoryImportanceSheet, dailyImportanceSheet } from "./importance-detail.js";
-import { publicDynamicDetailSheet, publicDynamicsSheet } from "./public-dynamics.js";
-import { bindResearchBrief, renderResearchBrief } from "./research-brief.js";
+import { publicDynamicDetailSheet, publicDynamicsSheet } from "./public-dynamics.js?v=20261003-source-sync";
+import { bindResearchBrief, renderResearchBrief } from "./research-brief.js?v=20261003-source-sync";
 import {
   collectThesisForm,
   suggestionValue,
