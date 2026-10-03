@@ -1,4 +1,8 @@
-export const API_ROOT = document.body.dataset.apiRoot || "/api";
+const configuredApiRoot = document.body.dataset.apiRoot || "/api";
+export const API_ROOT = configuredApiRoot === "/api"
+  && globalThis.location?.protocol === "file:"
+  ? "http://127.0.0.1:8000/api"
+  : configuredApiRoot;
 
 export async function api(path, options = {}) {
   const response = await fetch(`${API_ROOT}${path}`, {
